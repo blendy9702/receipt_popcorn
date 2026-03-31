@@ -1,0 +1,41 @@
+.flowing-menu-item {
+  position: relative;
+  overflow: hidden;
+  border-radius: 9999px;
+}
+
+.flowing-menu-item__link {
+  position: relative;
+  display: flex;
+  cursor: pointer;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+  font-size: 14px;
+  font-weight: 500;
+  text-decoration: none;
+  transition: color 0.2s;
+}
+
+.sidebar-nav .flowing-menu-item__link {
+  min-width: 0;
+  overflow: hidden;
+  padding: 0.5rem 0.75rem;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.flowing-menu-item__link:hover {
+  color: inherit;
+}
+
+.flowing-menu-item--zoom .flowing-menu-item__link {
+  transform-origin: left center;
+  transition:
+    transform 0.25s ease-out,
+    color 0.2s;
+}
+
+.flowing-menu-item--zoom:hover .flowing-menu-item__link {
+  transform: scale(1.08);
+}
