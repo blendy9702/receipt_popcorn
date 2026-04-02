@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { motion, useMotionValue, useSpring } from "framer-motion";
 import {
   ChevronLeft,
@@ -12,6 +12,7 @@ import {
   MapPinned,
   Menu,
   PackageSearch,
+  Pause,
   Pencil,
   Play,
   Plus,
@@ -19,6 +20,7 @@ import {
   Settings2,
   Sparkles,
   MessageSquare,
+  Trash2,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -58,6 +60,8 @@ type PlaceItem = {
   receipt_count: number;
   today_target: number;
   billing_owner_display: string | null;
+  status?: number | null;
+  issue_status?: number | null;
 };
 
 type PlacesResponse = {
@@ -96,6 +100,16 @@ type GoodthingUiData = {
   goodthing_ori_list: string[];
   goodthing_exclude_list: string[];
 };
+
+type ScriptReplaceCountResponse =
+  | number
+  | {
+      count?: number | string | null;
+      available_count?: number | string | null;
+      script_count?: number | string | null;
+      total?: number | string | null;
+      available?: number | string | null;
+    };
 
 const cardClassName =
   "rounded-[30px] border border-white/70 bg-[#fcf8e9]/94 shadow-[0_22px_60px_rgba(78,52,46,0.12)] backdrop-blur-xl";
@@ -215,11 +229,58 @@ function getScriptPreview(content: string, maxLength = 140) {
   return `${normalized.slice(0, maxLength - 3)}...`;
 }
 
-function getReservationSelection(reservation: string | null, options: string[]) {
+function parseScriptReplaceCount(data: ScriptReplaceCountResponse) {
+  if (typeof data === "number" && Number.isFinite(data)) {
+    return data;
+  }
+
+  if (typeof data !== "object" || data == null) {
+    return 0;
+  }
+
+  const candidates = [
+    data.count,
+    data.available_count,
+    data.script_count,
+    data.total,
+    data.available,
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate === "number" && Number.isFinite(candidate)) {
+      return candidate;
+    }
+
+    if (typeof candidate === "string") {
+      const parsed = Number(candidate);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+  }
+
+  return 0;
+}
+
+function getPlaceIssueStatus(place: PlaceItem) {
+  const value = place.status ?? place.issue_status ?? 1;
+  return Number(value) === 0 ? 0 : 1;
+}
+
+function getPlaceDisplayName(place: PlaceItem | null) {
+  return place?.name ?? place?.alias ?? "";
+}
+
+function getReservationSelection(
+  reservation: string | null,
+  options: string[],
+) {
   if (!reservation || reservation === "None") return new Set<string>();
   if (reservation === "random") {
     return new Set(
-      ["예약 없이 이용", "예약 후 이용"].filter((item) => options.includes(item)),
+      ["예약 없이 이용", "예약 후 이용"].filter((item) =>
+        options.includes(item),
+      ),
     );
   }
 
@@ -234,9 +295,8 @@ function getReservationSelection(reservation: string | null, options: string[]) 
 const NAVER_REVIEW_BASE_URL = "https://m.place.naver.com/my";
 
 export function HomeDashboard({
-  username = "",
+  username,
 }: {
-  initialToday: string;
   username?: string;
 }) {
   const [places, setPlaces] = useState<PlaceItem[]>([]);
@@ -273,9 +333,35 @@ export function HomeDashboard({
   const [goodthingModalOpen, setGoodthingModalOpen] = useState(false);
   const [goodthingLoading, setGoodthingLoading] = useState(false);
   const [goodthingSaving, setGoodthingSaving] = useState(false);
-  const [goodthingData, setGoodthingData] = useState<GoodthingUiData | null>(null);
+  const [goodthingData, setGoodthingData] = useState<GoodthingUiData | null>(
+    null,
+  );
   const [draftSortDir, setDraftSortDir] = useState<"asc" | "desc">("asc");
   const [draftLoadLimit, setDraftLoadLimit] = useState(200);
+  const [selectedPlaceForScriptReplace, setSelectedPlaceForScriptReplace] =
+    useState<PlaceItem | null>(null);
+  const [scriptReplaceModalOpen, setScriptReplaceModalOpen] = useState(false);
+  const [scriptReplaceLoading, setScriptReplaceLoading] = useState(false);
+  const [scriptReplaceSubmitting, setScriptReplaceSubmitting] = useState(false);
+  const [scriptReplaceAvailableCount, setScriptReplaceAvailableCount] =
+    useState(0);
+  const [scriptReplaceFile, setScriptReplaceFile] = useState<File | null>(null);
+  const scriptReplaceFileInputRef = useRef<HTMLInputElement>(null);
+  const [issueStatusDialogOpen, setIssueStatusDialogOpen] = useState(false);
+  const [selectedPlaceForIssueStatus, setSelectedPlaceForIssueStatus] =
+    useState<PlaceItem | null>(null);
+  const [pendingIssueStatus, setPendingIssueStatus] = useState<0 | 1 | null>(
+    null,
+  );
+  const [issueStatusSubmitting, setIssueStatusSubmitting] = useState(false);
+  const [hidePlaceDialogOpen, setHidePlaceDialogOpen] = useState(false);
+  const [selectedPlaceForHide, setSelectedPlaceForHide] =
+    useState<PlaceItem | null>(null);
+  const [hidePlaceSubmitting, setHidePlaceSubmitting] = useState(false);
+  const [purgeReceiptsDialogOpen, setPurgeReceiptsDialogOpen] = useState(false);
+  const [selectedPlaceForPurgeReceipts, setSelectedPlaceForPurgeReceipts] =
+    useState<PlaceItem | null>(null);
+  const [purgeReceiptsSubmitting, setPurgeReceiptsSubmitting] = useState(false);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -470,9 +556,12 @@ export function HomeDashboard({
     setScriptEditorLoading(true);
 
     try {
-      const res = await fetch(`/api/review-scripts/${script.review_script_id}`, {
-        cache: "no-store",
-      });
+      const res = await fetch(
+        `/api/review-scripts/${script.review_script_id}`,
+        {
+          cache: "no-store",
+        },
+      );
       const data = await res.json().catch(() => ({}));
 
       if (!res.ok) {
@@ -532,7 +621,8 @@ export function HomeDashboard({
             ? {
                 ...item,
                 content: trimmed,
-                status: item.status === "script_only" ? "script_only" : "edited",
+                status:
+                  item.status === "script_only" ? "script_only" : "edited",
               }
             : item,
         ),
@@ -632,11 +722,15 @@ export function HomeDashboard({
     setGoodthingData({ ...goodthingData, reservation: nextReservation });
 
     try {
-      await patchGoodthing(goodthingData.place_id, { reservation: nextReservation });
+      await patchGoodthing(goodthingData.place_id, {
+        reservation: nextReservation,
+      });
     } catch (error) {
       setGoodthingData({ ...goodthingData, reservation: previous });
       toast.error(
-        error instanceof Error ? error.message : "예약 정보 저장에 실패했습니다.",
+        error instanceof Error
+          ? error.message
+          : "예약 정보 저장에 실패했습니다.",
       );
     } finally {
       setGoodthingSaving(false);
@@ -665,10 +759,317 @@ export function HomeDashboard({
     } catch (error) {
       setGoodthingData(goodthingData);
       toast.error(
-        error instanceof Error ? error.message : "좋았던점 저장에 실패했습니다.",
+        error instanceof Error
+          ? error.message
+          : "좋았던점 저장에 실패했습니다.",
       );
     } finally {
       setGoodthingSaving(false);
+    }
+  };
+
+  const closeScriptReplaceModal = () => {
+    setScriptReplaceModalOpen(false);
+    setSelectedPlaceForScriptReplace(null);
+    setScriptReplaceLoading(false);
+    setScriptReplaceSubmitting(false);
+    setScriptReplaceAvailableCount(0);
+    setScriptReplaceFile(null);
+    if (scriptReplaceFileInputRef.current) {
+      scriptReplaceFileInputRef.current.value = "";
+    }
+  };
+
+  const openScriptReplaceModal = async (place: PlaceItem) => {
+    setOpenActionMenuId(null);
+    setSelectedPlaceForScriptReplace(place);
+    setScriptReplaceModalOpen(true);
+    setScriptReplaceLoading(true);
+    setScriptReplaceAvailableCount(0);
+    setScriptReplaceFile(null);
+
+    if (scriptReplaceFileInputRef.current) {
+      scriptReplaceFileInputRef.current.value = "";
+    }
+
+    try {
+      const res = await fetch(`/api/places/${place.pid}/scripts/count`, {
+        cache: "no-store",
+      });
+      const data = (await res.json().catch(() => ({}))) as
+        | ScriptReplaceCountResponse
+        | { detail?: string };
+
+      if (!res.ok) {
+        throw new Error(
+          typeof (data as { detail?: string }).detail === "string"
+            ? (data as { detail: string }).detail
+            : "교체 가능한 원고 개수를 불러오지 못했습니다.",
+        );
+      }
+
+      setScriptReplaceAvailableCount(
+        parseScriptReplaceCount(data as ScriptReplaceCountResponse),
+      );
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "교체 가능한 원고 개수를 불러오지 못했습니다.",
+      );
+    } finally {
+      setScriptReplaceLoading(false);
+    }
+  };
+
+  const handleScriptReplaceFileChange = (nextFile: File | null) => {
+    if (!nextFile) return;
+
+    if (!nextFile.name.toLowerCase().endsWith(".txt")) {
+      toast.error("TXT 파일만 업로드할 수 있습니다.");
+      return;
+    }
+
+    setScriptReplaceFile(nextFile);
+  };
+
+  const handleScriptReplaceSubmit = async () => {
+    if (!selectedPlaceForScriptReplace) {
+      toast.error("플레이스 정보를 확인할 수 없습니다.");
+      return;
+    }
+
+    if (!scriptReplaceFile) {
+      toast.error("원고 첨부파일(TXT)을 선택해 주세요.");
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append("file", scriptReplaceFile);
+
+    setScriptReplaceSubmitting(true);
+
+    try {
+      const res = await fetch(
+        `/api/places/${selectedPlaceForScriptReplace.pid}/scripts/replace`,
+        {
+          method: "POST",
+          body: formData,
+        },
+      );
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        throw new Error(
+          typeof (data as { detail?: string }).detail === "string"
+            ? (data as { detail: string }).detail
+            : "원고 교체 실행에 실패했습니다.",
+        );
+      }
+
+      toast.success("원고 교체 요청을 전송했습니다.");
+      closeScriptReplaceModal();
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "원고 교체 실행에 실패했습니다.",
+      );
+    } finally {
+      setScriptReplaceSubmitting(false);
+    }
+  };
+
+  const openIssueStatusDialog = (place: PlaceItem) => {
+    const currentStatus = getPlaceIssueStatus(place);
+    const nextStatus = currentStatus === 1 ? 0 : 1;
+
+    setOpenActionMenuId(null);
+    setSelectedPlaceForIssueStatus(place);
+    setPendingIssueStatus(nextStatus);
+    setIssueStatusDialogOpen(true);
+  };
+
+  const resetIssueStatusDialog = () => {
+    setIssueStatusDialogOpen(false);
+    setSelectedPlaceForIssueStatus(null);
+    setPendingIssueStatus(null);
+  };
+
+  const closeIssueStatusDialog = () => {
+    if (issueStatusSubmitting) return;
+    resetIssueStatusDialog();
+  };
+
+  const handleConfirmIssueStatus = async () => {
+    if (!selectedPlaceForIssueStatus || pendingIssueStatus == null) return;
+
+    const actionLabel = pendingIssueStatus === 1 ? "발행 시작" : "발행 중지";
+    setIssueStatusSubmitting(true);
+
+    try {
+      const res = await fetch(
+        `/api/places/${selectedPlaceForIssueStatus.pid}/issue-status`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: pendingIssueStatus }),
+        },
+      );
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        throw new Error(
+          typeof (data as { detail?: string }).detail === "string"
+            ? (data as { detail: string }).detail
+            : `${actionLabel} 처리에 실패했습니다.`,
+        );
+      }
+
+      setPlaces((current) =>
+        current.map((item) =>
+          item.pid === selectedPlaceForIssueStatus.pid
+            ? {
+                ...item,
+                status: pendingIssueStatus,
+                issue_status: pendingIssueStatus,
+              }
+            : item,
+        ),
+      );
+
+      toast.success(`${actionLabel} 처리 완료`);
+      resetIssueStatusDialog();
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : `${actionLabel} 처리에 실패했습니다.`,
+      );
+    } finally {
+      setIssueStatusSubmitting(false);
+    }
+  };
+
+  const openHidePlaceDialog = (place: PlaceItem) => {
+    setOpenActionMenuId(null);
+    setSelectedPlaceForHide(place);
+    setHidePlaceDialogOpen(true);
+  };
+
+  const resetHidePlaceDialog = () => {
+    setHidePlaceDialogOpen(false);
+    setSelectedPlaceForHide(null);
+  };
+
+  const closeHidePlaceDialog = () => {
+    if (hidePlaceSubmitting) return;
+    resetHidePlaceDialog();
+  };
+
+  const handleConfirmHidePlace = async () => {
+    const alias = selectedPlaceForHide?.alias?.trim();
+    if (!selectedPlaceForHide || !alias) {
+      toast.error("플레이스 alias 정보를 확인할 수 없습니다.");
+      return;
+    }
+
+    setHidePlaceSubmitting(true);
+
+    try {
+      const res = await fetch("/api/ui/hidden-places/hide-one", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ alias }),
+      });
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok || (data as { success?: boolean }).success === false) {
+        throw new Error(
+          typeof (data as { detail?: string; error?: string }).detail === "string"
+            ? (data as { detail: string }).detail
+            : typeof (data as { error?: string }).error === "string"
+              ? (data as { error: string }).error
+              : "플레이스 숨기기에 실패했습니다.",
+        );
+      }
+
+      setPlaces((current) =>
+        current.filter((item) => item.pid !== selectedPlaceForHide.pid),
+      );
+      toast.success("플레이스를 숨기기 목록에 추가했습니다.");
+      resetHidePlaceDialog();
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "플레이스 숨기기에 실패했습니다.",
+      );
+    } finally {
+      setHidePlaceSubmitting(false);
+    }
+  };
+
+  const openPurgeReceiptsDialog = (place: PlaceItem) => {
+    setOpenActionMenuId(null);
+    setSelectedPlaceForPurgeReceipts(place);
+    setPurgeReceiptsDialogOpen(true);
+  };
+
+  const resetPurgeReceiptsDialog = () => {
+    setPurgeReceiptsDialogOpen(false);
+    setSelectedPlaceForPurgeReceipts(null);
+  };
+
+  const closePurgeReceiptsDialog = () => {
+    if (purgeReceiptsSubmitting) return;
+    resetPurgeReceiptsDialog();
+  };
+
+  const handleConfirmPurgeReceipts = async () => {
+    if (!selectedPlaceForPurgeReceipts) return;
+
+    setPurgeReceiptsSubmitting(true);
+
+    try {
+      const res = await fetch(
+        `/api/places/${selectedPlaceForPurgeReceipts.pid}/purge-receipts`,
+        {
+          method: "DELETE",
+        },
+      );
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        throw new Error(
+          typeof (data as { detail?: string }).detail === "string"
+            ? (data as { detail: string }).detail
+            : "영수증 전체 삭제에 실패했습니다.",
+        );
+      }
+
+      const receiptsDeleted = Number(
+        (data as { receipts_deleted?: number }).receipts_deleted ?? 0,
+      );
+      const scriptsDeleted = Number(
+        (data as { scripts_deleted?: number }).scripts_deleted ?? 0,
+      );
+      const imagesDeleted = Number(
+        (data as { images_deleted?: number }).images_deleted ?? 0,
+      );
+
+      toast.success(
+        `삭제 완료: 영수증 ${receiptsDeleted}건, 원고 ${scriptsDeleted}건, 이미지 ${imagesDeleted}건`,
+      );
+      resetPurgeReceiptsDialog();
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "영수증 전체 삭제에 실패했습니다.",
+      );
+    } finally {
+      setPurgeReceiptsSubmitting(false);
     }
   };
 
@@ -729,7 +1130,9 @@ export function HomeDashboard({
             </h1>
           </div>
           <p className="text-sm text-[#4e342e]/65">
-            {`${username || "Popcorn"}님의 플레이스 현황을 한 화면에서 확인합니다.`}
+            {username
+              ? `${username}님의 플레이스 현황을 한 화면에서 확인합니다.`
+              : "플레이스 현황을 한 화면에서 확인합니다."}
           </p>
         </motion.div>
       </section>
@@ -974,7 +1377,7 @@ export function HomeDashboard({
                       요청 작업량
                     </TableHead>
                     <TableHead className="h-10 min-w-[104px] bg-[#ffedc8] px-3 py-2 text-center text-[14px] font-semibold text-[#4e342e]">
-                      발행시작
+                      발행시작일
                     </TableHead>
                     <TableHead className="h-10 min-w-[108px] bg-[#ffedc8] px-3 py-2 text-center text-[14px] font-semibold text-[#4e342e]">
                       오늘 작업량
@@ -985,7 +1388,15 @@ export function HomeDashboard({
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {paginatedPlaces.map((item, index) => (
+                  {paginatedPlaces.map((item, index) => {
+                    const issueStatus = getPlaceIssueStatus(item);
+                    const isIssuePaused = issueStatus === 0;
+                    const issueActionLabel = isIssuePaused
+                      ? "발행 시작"
+                      : "발행 중지";
+                    const IssueActionIcon = isIssuePaused ? Play : Pause;
+
+                    return (
                     <TableRow
                       key={item.pid}
                       className="border-b border-[#4e342e]/8 hover:bg-[#ffa000]/8"
@@ -1020,14 +1431,20 @@ export function HomeDashboard({
                       <TableCell className="px-3 py-2 text-center text-[14px] text-[#4e342e]/85">
                         {item.requested.toLocaleString("ko-KR")}
                       </TableCell>
-                      <TableCell className="px-3 py-2 text-center text-[14px] text-[#4e342e]/85">
+                      <TableCell
+                        className={cn(
+                          "px-3 py-2 text-center text-[14px] text-[#4e342e]/85",
+                        )}
+                      >
                         {formatShortDate(item.start_date)}
                       </TableCell>
                       <TableCell className="px-3 py-2 text-center text-[14px] font-semibold text-[#4e342e]/85">
                         {item.today.toLocaleString("ko-KR")} /{" "}
                         {item.today_target.toLocaleString("ko-KR")}
                       </TableCell>
-                      <TableCell className="px-3 py-2 text-center">
+                      <TableCell
+                        className="px-3 py-2 text-center"
+                      >
                         <div
                           data-action-menu-root="true"
                           className="relative flex items-center justify-center gap-2"
@@ -1045,10 +1462,17 @@ export function HomeDashboard({
                           </button>
                           <button
                             type="button"
-                            className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-[#4e342e]/12 bg-white/85 text-[#4e342e] transition hover:bg-[#fff8e1] hover:text-[#4e342e] hover:shadow-sm"
+                            className={cn(
+                              "inline-flex h-9 w-9 items-center justify-center rounded-full border transition hover:shadow-sm",
+                              isIssuePaused
+                                ? "border-[#4e342e]/12 bg-white/85 text-[#4e342e] hover:bg-[#fff8e1] hover:text-[#4e342e]"
+                                : "border-[#ffa000]/45 bg-[#ffa000]/40 text-[#4e342e] hover:bg-[#ffa000]/50 hover:text-[#4e342e]",
+                            )}
                             aria-label="메뉴"
                             title="메뉴"
-                            onClick={(event) => toggleActionMenu(item.pid, event)}
+                            onClick={(event) =>
+                              toggleActionMenu(item.pid, event)
+                            }
                           >
                             <Menu className="h-4 w-4" />
                           </button>
@@ -1070,12 +1494,16 @@ export function HomeDashboard({
                               onMouseDown={(event) => event.stopPropagation()}
                             >
                               {[
-                                { label: "발행 시작", icon: Play },
+                                {
+                                  label: issueActionLabel,
+                                  icon: IssueActionIcon,
+                                },
                                 { label: "플레이스 숨기기", icon: EyeOff },
                                 { label: "원고 수정", icon: Pencil },
                                 { label: "좋았던점 수정", icon: FilePenLine },
                                 { label: "원고 교체", icon: RefreshCw },
                                 { label: "수동 영수증추가", icon: Plus },
+                                { label: "영수증 전체 삭제", icon: Trash2 },
                                 { label: "다운로드", icon: Download },
                               ].map((menuItem) => {
                                 const MenuIcon = menuItem.icon;
@@ -1083,10 +1511,29 @@ export function HomeDashboard({
                                   <button
                                     key={menuItem.label}
                                     type="button"
-                                    className="flex w-full items-center gap-3 rounded-[16px] px-3 py-2.5 text-sm font-medium text-[#4e342e] transition hover:bg-[#fff8e1] hover:shadow-sm"
+                                    className="flex w-full items-center gap-3 rounded-[16px] px-3 py-2.5 text-sm font-medium text-[#4e342e] transition hover:bg-[#ffa000]/40 hover:shadow-sm"
                                     onClick={() => {
+                                      if (
+                                        menuItem.label === "발행 시작" ||
+                                        menuItem.label === "발행 중지"
+                                      ) {
+                                        openIssueStatusDialog(item);
+                                        return;
+                                      }
+                                      if (menuItem.label === "플레이스 숨기기") {
+                                        openHidePlaceDialog(item);
+                                        return;
+                                      }
+                                      if (menuItem.label === "영수증 전체 삭제") {
+                                        openPurgeReceiptsDialog(item);
+                                        return;
+                                      }
                                       if (menuItem.label === "원고 수정") {
                                         void openScriptsModal(item);
+                                        return;
+                                      }
+                                      if (menuItem.label === "원고 교체") {
+                                        void openScriptReplaceModal(item);
                                         return;
                                       }
                                       if (menuItem.label === "좋았던점 수정") {
@@ -1106,7 +1553,8 @@ export function HomeDashboard({
                         </div>
                       </TableCell>
                     </TableRow>
-                  ))}
+                    );
+                  })}
                 </TableBody>
               </Table>
             </div>
@@ -1281,9 +1729,9 @@ export function HomeDashboard({
 
             <div className="pr-10">
               <h2 className="text-2xl font-bold tracking-tight text-[#4e342e]">
-                {(selectedPlaceForReviews?.name ??
-                  selectedPlaceForReviews?.alias ??
-                  "선택한 플레이스") + " 리뷰 목록"}
+                {getPlaceDisplayName(selectedPlaceForReviews)
+                  ? `${getPlaceDisplayName(selectedPlaceForReviews)} 리뷰 목록`
+                  : "리뷰 목록"}
               </h2>
             </div>
 
@@ -1319,7 +1767,7 @@ export function HomeDashboard({
                     const reviewUrl =
                       review.user_code && review.review_id
                         ? `${NAVER_REVIEW_BASE_URL}/${encodeURIComponent(review.user_code)}/reviewfeed?reviewId=${encodeURIComponent(review.review_id)}`
-                      : "-";
+                        : "-";
 
                     return (
                       <TableRow
@@ -1426,9 +1874,9 @@ export function HomeDashboard({
 
             <div className="pr-10">
               <h2 className="text-2xl font-bold tracking-tight text-[#4e342e]">
-                {(selectedPlaceForScripts?.name ??
-                  selectedPlaceForScripts?.alias ??
-                  "선택한 플레이스") + " 원고 수정"}
+                {getPlaceDisplayName(selectedPlaceForScripts)
+                  ? `${getPlaceDisplayName(selectedPlaceForScripts)} 원고 수정`
+                  : "원고 수정"}
               </h2>
             </div>
 
@@ -1510,7 +1958,10 @@ export function HomeDashboard({
           onClick={() => setScriptEditorOpen(false)}
         >
           <motion.div
-            className={cn(cardClassName, "relative w-full max-w-[860px] p-5 sm:p-6")}
+            className={cn(
+              cardClassName,
+              "relative w-full max-w-[860px] p-5 sm:p-6",
+            )}
             initial={{ opacity: 0, scale: 0.98, y: 8 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             transition={{ duration: 0.28, ease: [0.25, 0.46, 0.45, 0.94] }}
@@ -1600,12 +2051,11 @@ export function HomeDashboard({
             <div className="pr-10">
               <h2 className="text-2xl font-bold tracking-tight text-[#4e342e]">
                 리뷰 세부사항 수정
-                <span className="ml-3 text-[#4e342e]/72">
-                  -{" "}
-                  {selectedPlaceForGoodthing?.name ??
-                    selectedPlaceForGoodthing?.alias ??
-                    "선택한 플레이스"}
-                </span>
+                {getPlaceDisplayName(selectedPlaceForGoodthing) ? (
+                  <span className="ml-3 text-[#4e342e]/72">
+                    - {getPlaceDisplayName(selectedPlaceForGoodthing)}
+                  </span>
+                ) : null}
               </h2>
             </div>
 
@@ -1697,6 +2147,333 @@ export function HomeDashboard({
                 </section>
               </div>
             )}
+          </motion.div>
+        </motion.div>
+      )}
+
+      {issueStatusDialogOpen &&
+        selectedPlaceForIssueStatus &&
+        pendingIssueStatus != null && (
+          <motion.div
+            className="fixed inset-0 z-70 flex items-center justify-center bg-[rgba(30,24,20,0.34)] p-4 backdrop-blur-[2px] lg:p-8"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: 0.2 }}
+            onClick={closeIssueStatusDialog}
+          >
+            <motion.div
+              className={cn(
+                cardClassName,
+                "relative w-full max-w-[560px] p-5 sm:p-6",
+              )}
+              initial={{ opacity: 0, scale: 0.98, y: 8 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              transition={{ duration: 0.28, ease: [0.25, 0.46, 0.45, 0.94] }}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <button
+                type="button"
+                aria-label="닫기"
+                onClick={closeIssueStatusDialog}
+                className="absolute right-4 top-4 flex h-10 w-10 items-center justify-center rounded-full text-[#4e342e]/80 transition-colors hover:bg-[#4e342e]/8"
+                disabled={issueStatusSubmitting}
+              >
+                <X className="h-5 w-5" />
+              </button>
+
+              <div className="pr-10">
+                <h2 className="text-2xl font-bold tracking-tight text-[#4e342e]">
+                  {pendingIssueStatus === 1 ? "발행 시작" : "발행 중지"}
+                </h2>
+                <p className="mt-3 text-[15px] leading-7 text-[#4e342e]/72">
+                  &quot;
+                  {selectedPlaceForIssueStatus.name ??
+                    selectedPlaceForIssueStatus.alias ??
+                    "해당"}
+                  &quot; 플레이스를{" "}
+                  {pendingIssueStatus === 1 ? "발행 시작" : "발행 중지"}
+                  하겠습니까?
+                </p>
+              </div>
+
+              <div className="mt-7 flex justify-end gap-3">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-11 rounded-full border-[#4e342e]/16 bg-white/80 px-5 text-sm font-semibold text-[#4e342e] hover:bg-[#4e342e]/6"
+                  onClick={closeIssueStatusDialog}
+                  disabled={issueStatusSubmitting}
+                >
+                  취소
+                </Button>
+                <Button
+                  type="button"
+                  variant="popcorn"
+                  className="h-11 px-5 text-sm font-bold"
+                  onClick={() => void handleConfirmIssueStatus()}
+                  disabled={issueStatusSubmitting}
+                >
+                  {issueStatusSubmitting ? "처리 중..." : "확인"}
+                </Button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+
+      {hidePlaceDialogOpen && selectedPlaceForHide && (
+        <motion.div
+          className="fixed inset-0 z-70 flex items-center justify-center bg-[rgba(30,24,20,0.34)] p-4 backdrop-blur-[2px] lg:p-8"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.2 }}
+          onClick={closeHidePlaceDialog}
+        >
+          <motion.div
+            className={cn(
+              cardClassName,
+              "relative w-full max-w-[580px] p-5 sm:p-6",
+            )}
+            initial={{ opacity: 0, scale: 0.98, y: 8 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            transition={{ duration: 0.28, ease: [0.25, 0.46, 0.45, 0.94] }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <button
+              type="button"
+              aria-label="닫기"
+              onClick={closeHidePlaceDialog}
+              className="absolute right-4 top-4 flex h-10 w-10 items-center justify-center rounded-full text-[#4e342e]/80 transition-colors hover:bg-[#4e342e]/8"
+              disabled={hidePlaceSubmitting}
+            >
+              <X className="h-5 w-5" />
+            </button>
+
+            <div className="pr-10">
+              <h2 className="text-2xl font-bold tracking-tight text-[#4e342e]">
+                플레이스 숨기기
+              </h2>
+              <p className="mt-3 text-[15px] leading-7 text-[#4e342e]/72">
+                &quot;
+                {selectedPlaceForHide.name ??
+                  selectedPlaceForHide.alias ??
+                  "해당"}
+                &quot; 플레이스를 숨기기 목록에 추가하겠습니까?
+              </p>
+            </div>
+
+            <div className="mt-7 flex justify-end gap-3">
+              <Button
+                type="button"
+                variant="outline"
+                className="h-11 rounded-full border-[#4e342e]/16 bg-white/80 px-5 text-sm font-semibold text-[#4e342e] hover:bg-[#4e342e]/6"
+                onClick={closeHidePlaceDialog}
+                disabled={hidePlaceSubmitting}
+              >
+                취소
+              </Button>
+              <Button
+                type="button"
+                variant="popcorn"
+                className="h-11 px-5 text-sm font-bold"
+                onClick={() => void handleConfirmHidePlace()}
+                disabled={hidePlaceSubmitting}
+              >
+                {hidePlaceSubmitting ? "처리 중..." : "확인"}
+              </Button>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+
+      {purgeReceiptsDialogOpen && selectedPlaceForPurgeReceipts && (
+        <motion.div
+          className="fixed inset-0 z-70 flex items-center justify-center bg-[rgba(30,24,20,0.34)] p-4 backdrop-blur-[2px] lg:p-8"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.2 }}
+          onClick={closePurgeReceiptsDialog}
+        >
+          <motion.div
+            className={cn(
+              cardClassName,
+              "relative w-full max-w-[620px] p-5 sm:p-6",
+            )}
+            initial={{ opacity: 0, scale: 0.98, y: 8 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            transition={{ duration: 0.28, ease: [0.25, 0.46, 0.45, 0.94] }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <button
+              type="button"
+              aria-label="닫기"
+              onClick={closePurgeReceiptsDialog}
+              className="absolute right-4 top-4 flex h-10 w-10 items-center justify-center rounded-full text-[#4e342e]/80 transition-colors hover:bg-[#4e342e]/8"
+              disabled={purgeReceiptsSubmitting}
+            >
+              <X className="h-5 w-5" />
+            </button>
+
+            <div className="pr-10">
+              <h2 className="text-2xl font-bold tracking-tight text-[#4e342e]">
+                영수증 전체 삭제
+              </h2>
+              <div className="mt-3 space-y-2 text-[15px] leading-7 text-[#4e342e]/72">
+                <p>
+                  <strong>
+                    {selectedPlaceForPurgeReceipts.name ??
+                      selectedPlaceForPurgeReceipts.alias ??
+                      "해당 플레이스"}
+                  </strong>
+                  에 올린 영수증 자료를 정리할까요?
+                </p>
+                <p>현재 작업 중이거나 이미 사용한 영수증은 그대로 남습니다.</p>
+                <p>
+                  아직 사용하지 않은 영수증, 연결된 원고, 첨부 사진이 함께
+                  삭제됩니다.
+                </p>
+                <p>삭제 후에는 되돌릴 수 없습니다.</p>
+              </div>
+            </div>
+
+            <div className="mt-7 flex justify-end gap-3">
+              <Button
+                type="button"
+                variant="outline"
+                className="h-11 rounded-full border-[#4e342e]/16 bg-white/80 px-5 text-sm font-semibold text-[#4e342e] hover:bg-[#4e342e]/6"
+                onClick={closePurgeReceiptsDialog}
+                disabled={purgeReceiptsSubmitting}
+              >
+                취소
+              </Button>
+              <Button
+                type="button"
+                variant="popcorn"
+                className="h-11 px-5 text-sm font-bold"
+                onClick={() => void handleConfirmPurgeReceipts()}
+                disabled={purgeReceiptsSubmitting}
+              >
+                {purgeReceiptsSubmitting ? "삭제 중..." : "삭제하기"}
+              </Button>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+
+      {scriptReplaceModalOpen && (
+        <motion.div
+          className="fixed inset-0 z-60 flex items-center justify-center bg-[rgba(30,24,20,0.28)] p-4 backdrop-blur-[2px] lg:p-8"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.2 }}
+          onClick={closeScriptReplaceModal}
+        >
+          <motion.div
+            className={cn(
+              cardClassName,
+              "relative w-full max-w-[820px] p-5 sm:p-6 lg:p-7",
+            )}
+            initial={{ opacity: 0, scale: 0.98, y: 8 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            transition={{ duration: 0.28, ease: [0.25, 0.46, 0.45, 0.94] }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <button
+              type="button"
+              aria-label="닫기"
+              onClick={closeScriptReplaceModal}
+              className="absolute right-4 top-4 flex h-10 w-10 items-center justify-center rounded-full text-[#4e342e]/80 transition-colors hover:bg-[#4e342e]/8"
+            >
+              <X className="h-5 w-5" />
+            </button>
+
+            <div className="pr-10">
+              <h2 className="text-[26px] font-bold tracking-tight text-[#4e342e] sm:text-[30px]">
+                {getPlaceDisplayName(selectedPlaceForScriptReplace)
+                  ? `${getPlaceDisplayName(selectedPlaceForScriptReplace)} 원고 교체`
+                  : "원고 교체"}
+              </h2>
+              <p className="mt-5 text-[15px] leading-7 text-[#4e342e]/72">
+                TXT 파일을 업로드하면 원고 가공 처리 후, 해당 플레이스에
+                등록된 기존 원고를 위에서부터 순서대로 덮어씁니다.
+              </p>
+            </div>
+
+            <div className="mt-5 rounded-[24px] border border-[#f2d48a] bg-[#fff1c9]/88 p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.5)]">
+              <div className="text-[22px] font-bold tracking-tight text-[#5d3c05]">
+                현재 교체 가능 원고:{" "}
+                {scriptReplaceLoading
+                  ? "불러오는 중..."
+                  : `${scriptReplaceAvailableCount.toLocaleString("ko-KR")}개`}
+              </div>
+              <div className="mt-3 space-y-1.5 text-[15px] leading-6 text-[#6d542b]">
+                <p>- 교체 대상: 영수증 미배정 또는 작업 배정 전인 원고만</p>
+                <p>
+                  - TXT 가공 후 라인이 50개이고, 기존 원고가 100개면 50개만
+                  교체
+                </p>
+                <p>
+                  - TXT 가공 후 라인이 150개이고, 기존 원고가 100개면
+                  100개만 교체하고 나머지는 무시
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-7">
+              <div className="text-[15px] font-semibold text-[#4e342e]">
+                원고 첨부파일 (TXT)
+              </div>
+              <input
+                ref={scriptReplaceFileInputRef}
+                type="file"
+                accept=".txt,text/plain"
+                className="hidden"
+                onChange={(event) =>
+                  handleScriptReplaceFileChange(
+                    event.target.files?.[0] ?? null,
+                  )
+                }
+              />
+
+              <div className="mt-3 flex flex-col gap-3 rounded-[22px] border border-[#4e342e]/10 bg-white/78 p-3 shadow-sm sm:flex-row sm:items-center">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-11 rounded-xl border-[#4e342e]/14 bg-white px-5 text-sm font-semibold text-[#4e342e] hover:bg-[#fff7e2]"
+                  onClick={() => scriptReplaceFileInputRef.current?.click()}
+                >
+                  파일 선택
+                </Button>
+                <div className="flex min-h-11 flex-1 items-center rounded-xl border border-[#4e342e]/10 bg-white px-4 py-3 text-sm text-[#4e342e]/62">
+                  <span className="truncate">
+                    {scriptReplaceFile?.name ?? "선택된 파일 없음"}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-8 flex justify-end gap-3">
+              <Button
+                type="button"
+                variant="outline"
+                className="h-11 rounded-full border-[#4e342e]/16 bg-white/80 px-5 text-sm font-semibold text-[#4e342e] hover:bg-[#4e342e]/6"
+                onClick={closeScriptReplaceModal}
+              >
+                닫기
+              </Button>
+              <Button
+                type="button"
+                variant="popcorn"
+                className="h-11 px-5 text-sm font-bold"
+                onClick={() => void handleScriptReplaceSubmit()}
+                disabled={
+                  scriptReplaceLoading ||
+                  scriptReplaceSubmitting ||
+                  !scriptReplaceFile
+                }
+              >
+                {scriptReplaceSubmitting ? "교체 실행 중..." : "교체 실행"}
+              </Button>
+            </div>
           </motion.div>
         </motion.div>
       )}

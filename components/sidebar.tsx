@@ -5,10 +5,10 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
   Coins,
-  LayoutGrid,
   LayoutDashboard,
   LogOut,
   MapPinned,
+  EyeOff,
   Ticket,
   Upload,
   User,
@@ -29,7 +29,7 @@ type MenuItem = {
 
 const menuItems: MenuItem[] = [
   { label: "대시보드", href: "/", icon: LayoutDashboard },
-  { label: "화면 관리", href: "/screen-management", icon: LayoutGrid },
+  { label: "화면 관리", href: "/screen-management", icon: EyeOff },
   { label: "이용권 관리", href: "/ticket-management", icon: Ticket },
   { label: "플레이스 대량등록", href: "/place-bulk-upload", icon: Upload },
   {
