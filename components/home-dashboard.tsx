@@ -294,11 +294,7 @@ function getReservationSelection(
 
 const NAVER_REVIEW_BASE_URL = "https://m.place.naver.com/my";
 
-export function HomeDashboard({
-  username,
-}: {
-  username?: string;
-}) {
+export function HomeDashboard({ username }: { username?: string }) {
   const [places, setPlaces] = useState<PlaceItem[]>([]);
   const [placesLoading, setPlacesLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
@@ -362,6 +358,21 @@ export function HomeDashboard({
   const [selectedPlaceForPurgeReceipts, setSelectedPlaceForPurgeReceipts] =
     useState<PlaceItem | null>(null);
   const [purgeReceiptsSubmitting, setPurgeReceiptsSubmitting] = useState(false);
+  const [manualUploadModalOpen, setManualUploadModalOpen] = useState(false);
+  const [selectedPlaceForManualUpload, setSelectedPlaceForManualUpload] =
+    useState<PlaceItem | null>(null);
+  const [manualUploadZipFile, setManualUploadZipFile] = useState<File | null>(
+    null,
+  );
+  const [manualUploadPhotosZipFile, setManualUploadPhotosZipFile] =
+    useState<File | null>(null);
+  const [manualUploadTxtFile, setManualUploadTxtFile] = useState<File | null>(
+    null,
+  );
+  const [manualUploadSubmitting, setManualUploadSubmitting] = useState(false);
+  const manualUploadZipFileInputRef = useRef<HTMLInputElement>(null);
+  const manualUploadPhotosZipFileInputRef = useRef<HTMLInputElement>(null);
+  const manualUploadTxtFileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -986,7 +997,8 @@ export function HomeDashboard({
 
       if (!res.ok || (data as { success?: boolean }).success === false) {
         throw new Error(
-          typeof (data as { detail?: string; error?: string }).detail === "string"
+          typeof (data as { detail?: string; error?: string }).detail ===
+            "string"
             ? (data as { detail: string }).detail
             : typeof (data as { error?: string }).error === "string"
               ? (data as { error: string }).error
@@ -1071,6 +1083,96 @@ export function HomeDashboard({
     } finally {
       setPurgeReceiptsSubmitting(false);
     }
+  };
+
+  const closeManualUploadModal = () => {
+    setManualUploadModalOpen(false);
+    setSelectedPlaceForManualUpload(null);
+    setManualUploadZipFile(null);
+    setManualUploadPhotosZipFile(null);
+    setManualUploadTxtFile(null);
+    if (manualUploadZipFileInputRef.current)
+      manualUploadZipFileInputRef.current.value = "";
+    if (manualUploadPhotosZipFileInputRef.current)
+      manualUploadPhotosZipFileInputRef.current.value = "";
+    if (manualUploadTxtFileInputRef.current)
+      manualUploadTxtFileInputRef.current.value = "";
+  };
+
+  const openManualUploadModal = (place: PlaceItem) => {
+    setOpenActionMenuId(null);
+    setSelectedPlaceForManualUpload(place);
+    setManualUploadZipFile(null);
+    setManualUploadPhotosZipFile(null);
+    setManualUploadTxtFile(null);
+    if (manualUploadZipFileInputRef.current)
+      manualUploadZipFileInputRef.current.value = "";
+    if (manualUploadPhotosZipFileInputRef.current)
+      manualUploadPhotosZipFileInputRef.current.value = "";
+    if (manualUploadTxtFileInputRef.current)
+      manualUploadTxtFileInputRef.current.value = "";
+    setManualUploadModalOpen(true);
+  };
+
+  const handleManualUploadSubmit = async () => {
+    if (!selectedPlaceForManualUpload) {
+      toast.error("플레이스 정보를 확인할 수 없습니다.");
+      return;
+    }
+    if (!manualUploadZipFile) {
+      toast.error("영수증 ZIP 파일을 선택해 주세요.");
+      return;
+    }
+    if (!manualUploadTxtFile) {
+      toast.error("원고 TXT 파일을 선택해 주세요.");
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append("place_id", String(selectedPlaceForManualUpload.pid));
+    formData.append("review_type", "D");
+    formData.append("zip_file", manualUploadZipFile);
+    formData.append("script_txt", manualUploadTxtFile);
+    if (manualUploadPhotosZipFile) {
+      formData.append("photos_zip", manualUploadPhotosZipFile);
+    }
+
+    setManualUploadSubmitting(true);
+    try {
+      const res = await fetch("/api/receipts/upload", {
+        method: "POST",
+        body: formData,
+      });
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        throw new Error(
+          typeof (data as { detail?: string }).detail === "string"
+            ? (data as { detail: string }).detail
+            : "영수증 추가에 실패했습니다.",
+        );
+      }
+
+      toast.success("수동 영수증 추가 요청을 전송했습니다.");
+      closeManualUploadModal();
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "영수증 추가에 실패했습니다.",
+      );
+    } finally {
+      setManualUploadSubmitting(false);
+    }
+  };
+
+  const handleDownloadPlaceJobs = (place: PlaceItem) => {
+    setOpenActionMenuId(null);
+
+    const params = new URLSearchParams({
+      place_name: place.name ?? "",
+      alias: place.alias ?? "",
+    });
+
+    window.location.href = `/api/places/${encodeURIComponent(String(place.pid))}/jobs.xlsx?${params.toString()}`;
   };
 
   const applySettings = () => {
@@ -1397,162 +1499,176 @@ export function HomeDashboard({
                     const IssueActionIcon = isIssuePaused ? Play : Pause;
 
                     return (
-                    <TableRow
-                      key={item.pid}
-                      className="border-b border-[#4e342e]/8 hover:bg-[#ffa000]/8"
-                    >
-                      <TableCell className="px-3 py-2 text-center text-[14px] text-[#4e342e]/80">
-                        {pageStart + index}
-                      </TableCell>
-                      <TableCell
-                        className="max-w-[200px] truncate px-3 py-2 text-center text-[14px] font-medium text-[#4e342e]/92"
-                        title={item.name ?? item.alias ?? "-"}
+                      <TableRow
+                        key={item.pid}
+                        className="border-b border-[#4e342e]/8 hover:bg-[#ffa000]/8"
                       >
-                        {item.name ?? item.alias ?? "-"}
-                      </TableCell>
-                      <TableCell className="px-3 py-2 text-center text-[14px] text-[#4e342e]/85">
-                        {item.mid ?? "-"}
-                      </TableCell>
-                      <TableCell className="px-3 py-2 text-center text-[14px] font-semibold text-[#4e342e]/85">
-                        {item.done.toLocaleString("ko-KR")}
-                      </TableCell>
-                      <TableCell className="px-3 py-2 text-center text-[14px] text-[#4e342e]/85">
-                        {item.error.toLocaleString("ko-KR")}
-                      </TableCell>
-                      <TableCell className="px-3 py-2 text-center text-[14px] font-semibold text-[#4e342e]/85">
-                        {item.remaining.toLocaleString("ko-KR")}
-                      </TableCell>
-                      <TableCell className="px-3 py-2 text-center text-[14px] text-[#4e342e]/85">
-                        {item.receipt_count.toLocaleString("ko-KR")}
-                      </TableCell>
-                      <TableCell className="px-3 py-2 text-center text-[14px] text-[#4e342e]/85">
-                        {item.remaining_scripts.toLocaleString("ko-KR")}
-                      </TableCell>
-                      <TableCell className="px-3 py-2 text-center text-[14px] text-[#4e342e]/85">
-                        {item.requested.toLocaleString("ko-KR")}
-                      </TableCell>
-                      <TableCell
-                        className={cn(
-                          "px-3 py-2 text-center text-[14px] text-[#4e342e]/85",
-                        )}
-                      >
-                        {formatShortDate(item.start_date)}
-                      </TableCell>
-                      <TableCell className="px-3 py-2 text-center text-[14px] font-semibold text-[#4e342e]/85">
-                        {item.today.toLocaleString("ko-KR")} /{" "}
-                        {item.today_target.toLocaleString("ko-KR")}
-                      </TableCell>
-                      <TableCell
-                        className="px-3 py-2 text-center"
-                      >
-                        <div
-                          data-action-menu-root="true"
-                          className="relative flex items-center justify-center gap-2"
-                          onMouseDown={(event) => event.stopPropagation()}
-                          onClick={(event) => event.stopPropagation()}
+                        <TableCell className="px-3 py-2 text-center text-[14px] text-[#4e342e]/80">
+                          {pageStart + index}
+                        </TableCell>
+                        <TableCell
+                          className="max-w-[200px] truncate px-3 py-2 text-center text-[14px] font-medium text-[#4e342e]/92"
+                          title={item.name ?? item.alias ?? "-"}
                         >
-                          <button
-                            type="button"
-                            className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-[#4e342e]/12 bg-white/85 text-[#4e342e] transition hover:bg-[#fff8e1] hover:text-[#4e342e] hover:shadow-sm"
-                            aria-label="리뷰목록"
-                            title="리뷰목록"
-                            onClick={() => void openReviewsModal(item)}
-                          >
-                            <MessageSquare className="h-4 w-4" />
-                          </button>
-                          <button
-                            type="button"
-                            className={cn(
-                              "inline-flex h-9 w-9 items-center justify-center rounded-full border transition hover:shadow-sm",
-                              isIssuePaused
-                                ? "border-[#4e342e]/12 bg-white/85 text-[#4e342e] hover:bg-[#fff8e1] hover:text-[#4e342e]"
-                                : "border-[#ffa000]/45 bg-[#ffa000]/40 text-[#4e342e] hover:bg-[#ffa000]/50 hover:text-[#4e342e]",
-                            )}
-                            aria-label="메뉴"
-                            title="메뉴"
-                            onClick={(event) =>
-                              toggleActionMenu(item.pid, event)
-                            }
-                          >
-                            <Menu className="h-4 w-4" />
-                          </button>
-
-                          {openActionMenuId === item.pid && (
-                            <motion.div
-                              className={cn(
-                                "absolute right-0 z-20 w-[220px] overflow-hidden rounded-[22px] border border-[#4e342e]/12 bg-[#fcf8e9] p-2 text-left shadow-[0_18px_40px_rgba(78,52,46,0.12)]",
-                                openActionMenuDirection === "up"
-                                  ? "bottom-[calc(100%+8px)]"
-                                  : "top-[calc(100%+8px)]",
-                              )}
-                              initial={{
-                                opacity: 0,
-                                y: openActionMenuDirection === "up" ? -8 : 8,
-                              }}
-                              animate={{ opacity: 1, y: 0 }}
-                              transition={{ duration: 0.18 }}
-                              onMouseDown={(event) => event.stopPropagation()}
-                            >
-                              {[
-                                {
-                                  label: issueActionLabel,
-                                  icon: IssueActionIcon,
-                                },
-                                { label: "플레이스 숨기기", icon: EyeOff },
-                                { label: "원고 수정", icon: Pencil },
-                                { label: "좋았던점 수정", icon: FilePenLine },
-                                { label: "원고 교체", icon: RefreshCw },
-                                { label: "수동 영수증추가", icon: Plus },
-                                { label: "영수증 전체 삭제", icon: Trash2 },
-                                { label: "다운로드", icon: Download },
-                              ].map((menuItem) => {
-                                const MenuIcon = menuItem.icon;
-                                return (
-                                  <button
-                                    key={menuItem.label}
-                                    type="button"
-                                    className="flex w-full items-center gap-3 rounded-[16px] px-3 py-2.5 text-sm font-medium text-[#4e342e] transition hover:bg-[#ffa000]/40 hover:shadow-sm"
-                                    onClick={() => {
-                                      if (
-                                        menuItem.label === "발행 시작" ||
-                                        menuItem.label === "발행 중지"
-                                      ) {
-                                        openIssueStatusDialog(item);
-                                        return;
-                                      }
-                                      if (menuItem.label === "플레이스 숨기기") {
-                                        openHidePlaceDialog(item);
-                                        return;
-                                      }
-                                      if (menuItem.label === "영수증 전체 삭제") {
-                                        openPurgeReceiptsDialog(item);
-                                        return;
-                                      }
-                                      if (menuItem.label === "원고 수정") {
-                                        void openScriptsModal(item);
-                                        return;
-                                      }
-                                      if (menuItem.label === "원고 교체") {
-                                        void openScriptReplaceModal(item);
-                                        return;
-                                      }
-                                      if (menuItem.label === "좋았던점 수정") {
-                                        void openGoodthingModal(item);
-                                        return;
-                                      }
-                                      setOpenActionMenuId(null);
-                                    }}
-                                  >
-                                    <MenuIcon className="h-4 w-4 shrink-0 text-[#4e342e]/75" />
-                                    <span>{menuItem.label}</span>
-                                  </button>
-                                );
-                              })}
-                            </motion.div>
+                          {item.name ?? item.alias ?? "-"}
+                        </TableCell>
+                        <TableCell className="px-3 py-2 text-center text-[14px] text-[#4e342e]/85">
+                          {item.mid ?? "-"}
+                        </TableCell>
+                        <TableCell className="px-3 py-2 text-center text-[14px] font-semibold text-[#4e342e]/85">
+                          {item.done.toLocaleString("ko-KR")}
+                        </TableCell>
+                        <TableCell className="px-3 py-2 text-center text-[14px] text-[#4e342e]/85">
+                          {item.error.toLocaleString("ko-KR")}
+                        </TableCell>
+                        <TableCell className="px-3 py-2 text-center text-[14px] font-semibold text-[#4e342e]/85">
+                          {item.remaining.toLocaleString("ko-KR")}
+                        </TableCell>
+                        <TableCell className="px-3 py-2 text-center text-[14px] text-[#4e342e]/85">
+                          {item.receipt_count.toLocaleString("ko-KR")}
+                        </TableCell>
+                        <TableCell className="px-3 py-2 text-center text-[14px] text-[#4e342e]/85">
+                          {item.remaining_scripts.toLocaleString("ko-KR")}
+                        </TableCell>
+                        <TableCell className="px-3 py-2 text-center text-[14px] text-[#4e342e]/85">
+                          {item.requested.toLocaleString("ko-KR")}
+                        </TableCell>
+                        <TableCell
+                          className={cn(
+                            "px-3 py-2 text-center text-[14px] text-[#4e342e]/85",
                           )}
-                        </div>
-                      </TableCell>
-                    </TableRow>
+                        >
+                          {formatShortDate(item.start_date)}
+                        </TableCell>
+                        <TableCell className="px-3 py-2 text-center text-[14px] font-semibold text-[#4e342e]/85">
+                          {item.today.toLocaleString("ko-KR")} /{" "}
+                          {item.today_target.toLocaleString("ko-KR")}
+                        </TableCell>
+                        <TableCell className="px-3 py-2 text-center">
+                          <div
+                            data-action-menu-root="true"
+                            className="relative flex items-center justify-center gap-2"
+                            onMouseDown={(event) => event.stopPropagation()}
+                            onClick={(event) => event.stopPropagation()}
+                          >
+                            <button
+                              type="button"
+                              className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-[#4e342e]/12 bg-white/85 text-[#4e342e] transition hover:bg-[#fff8e1] hover:text-[#4e342e] hover:shadow-sm"
+                              aria-label="리뷰목록"
+                              title="리뷰목록"
+                              onClick={() => void openReviewsModal(item)}
+                            >
+                              <MessageSquare className="h-4 w-4" />
+                            </button>
+                            <button
+                              type="button"
+                              className={cn(
+                                "inline-flex h-9 w-9 items-center justify-center rounded-full border transition hover:shadow-sm",
+                                isIssuePaused
+                                  ? "border-[#4e342e]/12 bg-white/85 text-[#4e342e] hover:bg-[#fff8e1] hover:text-[#4e342e]"
+                                  : "border-[#ffa000]/45 bg-[#ffa000]/40 text-[#4e342e] hover:bg-[#ffa000]/50 hover:text-[#4e342e]",
+                              )}
+                              aria-label="메뉴"
+                              title="메뉴"
+                              onClick={(event) =>
+                                toggleActionMenu(item.pid, event)
+                              }
+                            >
+                              <Menu className="h-4 w-4" />
+                            </button>
+
+                            {openActionMenuId === item.pid && (
+                              <motion.div
+                                className={cn(
+                                  "absolute right-0 z-20 w-[220px] overflow-hidden rounded-[22px] border border-[#4e342e]/12 bg-[#fcf8e9] p-2 text-left shadow-[0_18px_40px_rgba(78,52,46,0.12)]",
+                                  openActionMenuDirection === "up"
+                                    ? "bottom-[calc(100%+8px)]"
+                                    : "top-[calc(100%+8px)]",
+                                )}
+                                initial={{
+                                  opacity: 0,
+                                  y: openActionMenuDirection === "up" ? -8 : 8,
+                                }}
+                                animate={{ opacity: 1, y: 0 }}
+                                transition={{ duration: 0.18 }}
+                                onMouseDown={(event) => event.stopPropagation()}
+                              >
+                                {[
+                                  {
+                                    label: issueActionLabel,
+                                    icon: IssueActionIcon,
+                                  },
+                                  { label: "플레이스 숨기기", icon: EyeOff },
+                                  { label: "원고 수정", icon: Pencil },
+                                  { label: "좋았던점 수정", icon: FilePenLine },
+                                  { label: "원고 교체", icon: RefreshCw },
+                                  { label: "수동 영수증추가", icon: Plus },
+                                  { label: "영수증 전체 삭제", icon: Trash2 },
+                                  { label: "다운로드", icon: Download },
+                                ].map((menuItem) => {
+                                  const MenuIcon = menuItem.icon;
+                                  return (
+                                    <button
+                                      key={menuItem.label}
+                                      type="button"
+                                      className="flex w-full items-center gap-3 rounded-[16px] px-3 py-2.5 text-sm font-medium text-[#4e342e] transition hover:bg-[#ffa000]/40 hover:shadow-sm"
+                                      onClick={() => {
+                                        if (
+                                          menuItem.label === "발행 시작" ||
+                                          menuItem.label === "발행 중지"
+                                        ) {
+                                          openIssueStatusDialog(item);
+                                          return;
+                                        }
+                                        if (
+                                          menuItem.label === "플레이스 숨기기"
+                                        ) {
+                                          openHidePlaceDialog(item);
+                                          return;
+                                        }
+                                        if (
+                                          menuItem.label === "영수증 전체 삭제"
+                                        ) {
+                                          openPurgeReceiptsDialog(item);
+                                          return;
+                                        }
+                                        if (menuItem.label === "다운로드") {
+                                          handleDownloadPlaceJobs(item);
+                                          return;
+                                        }
+                                        if (menuItem.label === "원고 수정") {
+                                          void openScriptsModal(item);
+                                          return;
+                                        }
+                                        if (menuItem.label === "원고 교체") {
+                                          void openScriptReplaceModal(item);
+                                          return;
+                                        }
+                                        if (
+                                          menuItem.label === "수동 영수증추가"
+                                        ) {
+                                          openManualUploadModal(item);
+                                          return;
+                                        }
+                                        if (
+                                          menuItem.label === "좋았던점 수정"
+                                        ) {
+                                          void openGoodthingModal(item);
+                                          return;
+                                        }
+                                        setOpenActionMenuId(null);
+                                      }}
+                                    >
+                                      <MenuIcon className="h-4 w-4 shrink-0 text-[#4e342e]/75" />
+                                      <span>{menuItem.label}</span>
+                                    </button>
+                                  );
+                                })}
+                              </motion.div>
+                            )}
+                          </div>
+                        </TableCell>
+                      </TableRow>
                     );
                   })}
                 </TableBody>
@@ -2359,6 +2475,226 @@ export function HomeDashboard({
         </motion.div>
       )}
 
+      {manualUploadModalOpen && selectedPlaceForManualUpload && (
+        <motion.div
+          className="fixed inset-0 z-60 flex items-center justify-center bg-[rgba(30,24,20,0.28)] p-4 backdrop-blur-[2px] lg:p-8"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.2 }}
+          onClick={() => {
+            if (!manualUploadSubmitting) closeManualUploadModal();
+          }}
+        >
+          <motion.div
+            className={cn(
+              cardClassName,
+              "relative w-full max-w-[820px] p-5 sm:p-6 lg:p-7",
+            )}
+            initial={{ opacity: 0, scale: 0.98, y: 8 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            transition={{ duration: 0.28, ease: [0.25, 0.46, 0.45, 0.94] }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <button
+              type="button"
+              aria-label="닫기"
+              onClick={closeManualUploadModal}
+              disabled={manualUploadSubmitting}
+              className="absolute right-4 top-4 flex h-10 w-10 items-center justify-center rounded-full text-[#4e342e]/80 transition-colors hover:bg-[#4e342e]/8 disabled:opacity-40"
+            >
+              <X className="h-5 w-5" />
+            </button>
+
+            <div className="pr-10">
+              <h2 className="text-[26px] font-bold tracking-tight text-[#4e342e] sm:text-[30px]">
+                {getPlaceDisplayName(selectedPlaceForManualUpload)
+                  ? `${getPlaceDisplayName(selectedPlaceForManualUpload)} - 수동 영수증추가`
+                  : "수동 영수증추가"}
+              </h2>
+            </div>
+
+            {/* 리뷰 타입 */}
+            <div className="mt-6">
+              <div className="text-[15px] font-semibold text-[#4e342e]">
+                리뷰 타입
+              </div>
+              <div className="mt-3 flex items-center gap-2">
+                <div className="flex h-10 items-center gap-2 rounded-xl border border-[#ffa000]/50 bg-[#fff8e1] px-4 shadow-sm">
+                  <div className="flex h-4 w-4 items-center justify-center rounded-full border-2 border-[#ffa000] bg-[#ffa000]">
+                    <div className="h-1.5 w-1.5 rounded-full bg-white" />
+                  </div>
+                  <span className="text-sm font-bold text-[#4e342e]">D</span>
+                </div>
+              </div>
+            </div>
+
+            {/* 영수증 첨부파일 (ZIP) */}
+            <div className="mt-6">
+              <div className="text-[15px] font-semibold text-[#4e342e]">
+                영수증 첨부파일 (ZIP)
+              </div>
+              <input
+                ref={manualUploadZipFileInputRef}
+                type="file"
+                accept=".zip,application/zip"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0] ?? null;
+                  if (f && !f.name.toLowerCase().endsWith(".zip")) {
+                    toast.error("ZIP 파일만 업로드할 수 있습니다.");
+                    return;
+                  }
+                  setManualUploadZipFile(f);
+                }}
+              />
+              <div className="mt-3 flex flex-col gap-3 rounded-[22px] border border-[#4e342e]/10 bg-white/78 p-3 shadow-sm sm:flex-row sm:items-center">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-11 rounded-xl border-[#4e342e]/14 bg-white px-5 text-sm font-semibold text-[#4e342e] hover:bg-[#fff7e2]"
+                  onClick={() => manualUploadZipFileInputRef.current?.click()}
+                  disabled={manualUploadSubmitting}
+                >
+                  파일 선택
+                </Button>
+                <div className="flex min-h-11 flex-1 items-center rounded-xl border border-[#4e342e]/10 bg-white px-4 py-3 text-sm text-[#4e342e]/62">
+                  <span className="truncate">
+                    {manualUploadZipFile?.name ?? "선택된 파일 없음"}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* 추가 이미지 (ZIP, 선택) */}
+            <div className="mt-5">
+              <div className="text-[15px] font-semibold text-[#4e342e]">
+                추가 이미지{" "}
+                <span className="text-[13px] font-normal text-[#4e342e]/55">
+                  (ZIP, 선택)
+                </span>
+              </div>
+              <input
+                ref={manualUploadPhotosZipFileInputRef}
+                type="file"
+                accept=".zip,application/zip"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0] ?? null;
+                  if (f && !f.name.toLowerCase().endsWith(".zip")) {
+                    toast.error("ZIP 파일만 업로드할 수 있습니다.");
+                    return;
+                  }
+                  setManualUploadPhotosZipFile(f);
+                }}
+              />
+              <div className="mt-3 flex flex-col gap-3 rounded-[22px] border border-[#4e342e]/10 bg-white/78 p-3 shadow-sm sm:flex-row sm:items-center">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-11 rounded-xl border-[#4e342e]/14 bg-white px-5 text-sm font-semibold text-[#4e342e] hover:bg-[#fff7e2]"
+                  onClick={() =>
+                    manualUploadPhotosZipFileInputRef.current?.click()
+                  }
+                  disabled={manualUploadSubmitting}
+                >
+                  파일 선택
+                </Button>
+                <div className="flex min-h-11 flex-1 items-center rounded-xl border border-[#4e342e]/10 bg-white px-4 py-3 text-sm text-[#4e342e]/62">
+                  <span className="truncate">
+                    {manualUploadPhotosZipFile?.name ?? "선택된 파일 없음"}
+                  </span>
+                </div>
+              </div>
+              <div className="mt-3 space-y-1.5 rounded-[18px] border border-[#4e342e]/8 bg-[#faf6ee] px-4 py-3 text-[13px] leading-6 text-[#6d542b]">
+                <p>
+                  <strong>개별모드(기본)</strong>: ZIP 내부 이미지를{" "}
+                  <strong>경로/파일명 기준 정렬</strong> 후, 이번에 생성된
+                  영수증에 <strong>순서대로 1:1</strong> 매핑됩니다.
+                </p>
+                <p>
+                  <strong>폴더모드(번호별 1:N, D타입에서만)</strong>: ZIP이
+                  폴더로 구분되어 있고, 최상위 폴더명이{" "}
+                  <strong>숫자(1,2,4...)</strong>인 경우에만 적용됩니다. 해당
+                  숫자는 이번 업로드로 생성된 영수증 순서(1부터)이며, 그 폴더 안
+                  이미지들이 해당 영수증에 <strong>여러 장(1:N)</strong>으로
+                  첨부됩니다.{" "}
+                  <span className="text-[#c25f00]">
+                    (예: <code>1/</code>, <code>2/</code>, <code>4/</code>)
+                  </span>
+                </p>
+              </div>
+            </div>
+
+            {/* D타입 안내 + 원고 첨부파일 */}
+            <div className="mt-5">
+              <div className="rounded-[18px] border border-[#f2d48a] bg-[#fff8e1]/80 px-4 py-3 text-[14px] text-[#7d5a24]">
+                D타입은 텍스트 원고 입력 방식입니다.
+              </div>
+              <div className="mt-4">
+                <div className="text-[15px] font-semibold text-[#4e342e]">
+                  원고 첨부파일 (TXT)
+                </div>
+                <input
+                  ref={manualUploadTxtFileInputRef}
+                  type="file"
+                  accept=".txt,text/plain"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0] ?? null;
+                    if (f && !f.name.toLowerCase().endsWith(".txt")) {
+                      toast.error("TXT 파일만 업로드할 수 있습니다.");
+                      return;
+                    }
+                    setManualUploadTxtFile(f);
+                  }}
+                />
+                <div className="mt-3 flex flex-col gap-3 rounded-[22px] border border-[#4e342e]/10 bg-white/78 p-3 shadow-sm sm:flex-row sm:items-center">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-11 rounded-xl border-[#4e342e]/14 bg-white px-5 text-sm font-semibold text-[#4e342e] hover:bg-[#fff7e2]"
+                    onClick={() => manualUploadTxtFileInputRef.current?.click()}
+                    disabled={manualUploadSubmitting}
+                  >
+                    파일 선택
+                  </Button>
+                  <div className="flex min-h-11 flex-1 items-center rounded-xl border border-[#4e342e]/10 bg-white px-4 py-3 text-sm text-[#4e342e]/62">
+                    <span className="truncate">
+                      {manualUploadTxtFile?.name ?? "선택된 파일 없음"}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-8 flex justify-end gap-3">
+              <Button
+                type="button"
+                variant="outline"
+                className="h-11 rounded-full border-[#4e342e]/16 bg-white/80 px-5 text-sm font-semibold text-[#4e342e] hover:bg-[#4e342e]/6"
+                onClick={closeManualUploadModal}
+                disabled={manualUploadSubmitting}
+              >
+                닫기
+              </Button>
+              <Button
+                type="button"
+                variant="popcorn"
+                className="h-11 px-5 text-sm font-bold"
+                onClick={() => void handleManualUploadSubmit()}
+                disabled={
+                  manualUploadSubmitting ||
+                  !manualUploadZipFile ||
+                  !manualUploadTxtFile
+                }
+              >
+                {manualUploadSubmitting ? "추가 중..." : "추가"}
+              </Button>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+
       {scriptReplaceModalOpen && (
         <motion.div
           className="fixed inset-0 z-60 flex items-center justify-center bg-[rgba(30,24,20,0.28)] p-4 backdrop-blur-[2px] lg:p-8"
@@ -2393,8 +2729,8 @@ export function HomeDashboard({
                   : "원고 교체"}
               </h2>
               <p className="mt-5 text-[15px] leading-7 text-[#4e342e]/72">
-                TXT 파일을 업로드하면 원고 가공 처리 후, 해당 플레이스에
-                등록된 기존 원고를 위에서부터 순서대로 덮어씁니다.
+                TXT 파일을 업로드하면 원고 가공 처리 후, 해당 플레이스에 등록된
+                기존 원고를 위에서부터 순서대로 덮어씁니다.
               </p>
             </div>
 
@@ -2408,12 +2744,11 @@ export function HomeDashboard({
               <div className="mt-3 space-y-1.5 text-[15px] leading-6 text-[#6d542b]">
                 <p>- 교체 대상: 영수증 미배정 또는 작업 배정 전인 원고만</p>
                 <p>
-                  - TXT 가공 후 라인이 50개이고, 기존 원고가 100개면 50개만
-                  교체
+                  - TXT 가공 후 라인이 50개이고, 기존 원고가 100개면 50개만 교체
                 </p>
                 <p>
-                  - TXT 가공 후 라인이 150개이고, 기존 원고가 100개면
-                  100개만 교체하고 나머지는 무시
+                  - TXT 가공 후 라인이 150개이고, 기존 원고가 100개면 100개만
+                  교체하고 나머지는 무시
                 </p>
               </div>
             </div>
@@ -2428,9 +2763,7 @@ export function HomeDashboard({
                 accept=".txt,text/plain"
                 className="hidden"
                 onChange={(event) =>
-                  handleScriptReplaceFileChange(
-                    event.target.files?.[0] ?? null,
-                  )
+                  handleScriptReplaceFileChange(event.target.files?.[0] ?? null)
                 }
               />
 
