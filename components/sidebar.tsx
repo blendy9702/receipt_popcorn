@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import {
   Coins,
+  ExternalLink,
   LayoutDashboard,
   LogOut,
   MapPinned,
@@ -220,6 +221,14 @@ export function Sidebar({ mobileOpen = false, onClose }: SidebarProps) {
                   </div>
                 </div>
               </div>
+              <a
+                href="https://popcorn1.me/"
+                onClick={onClose}
+                className="flex w-full min-w-0 items-center gap-2 overflow-hidden rounded-full border-2 border-[#4e342e]/25 bg-white/40 px-3 py-2.5 text-left text-[14px] font-semibold whitespace-nowrap text-[#4e342e] transition-all hover:border-[#ffa000]/40 hover:bg-[#ffa000]/15"
+              >
+                <ExternalLink size={18} className="shrink-0" aria-hidden />
+                <span>POPCORN 블로그 리뷰</span>
+              </a>
               <button
                 type="button"
                 onClick={handleLogout}

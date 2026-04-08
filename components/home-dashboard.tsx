@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import Image from "next/image";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion, useMotionValue, useSpring } from "framer-motion";
 import {
   ChevronLeft,
@@ -42,6 +43,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 
 type PlaceItem = {
@@ -73,15 +75,32 @@ type PlacesResponse = {
   next_offset?: number | null;
 };
 
+type PlaceStatsResponse = {
+  registered_places?: number;
+  requested_workload?: number;
+  remaining_workload?: number;
+  completed_workload?: number;
+  completed_places?: number;
+};
+
 type ReviewItem = {
   job_id: number | null;
   username: string | number | null;
   user_code: string | null;
   review_id: string | null;
   receipt_id: number | null;
+  script_id: number | null;
   status: number | null;
   postdate: string | null;
   realdate: string | null;
+};
+
+type ReviewImageItem = {
+  id: number;
+  filename?: string | null;
+  url?: string | null;
+  group?: string | null;
+  group_label?: string | null;
 };
 
 type ScriptListItem = {
@@ -110,6 +129,16 @@ type ScriptReplaceCountResponse =
       total?: number | string | null;
       available?: number | string | null;
     };
+
+type PageSizeOption = "10" | "20" | "50" | "all";
+type ManagerRole = "admin" | "parent" | "child" | "unknown";
+
+const DEFAULT_SORT_DIR: "asc" | "desc" = "asc";
+const DEFAULT_LOAD_LIMIT = 200;
+const MAX_LOAD_LIMIT = 1000;
+const HOME_TABLE_SORT_KEY = "home-dashboard:sort-dir";
+const HOME_TABLE_LOAD_LIMIT_KEY = "home-dashboard:load-limit";
+const HOME_TABLE_PAGE_SIZE_KEY = "home-dashboard:page-size";
 
 const cardClassName =
   "rounded-[30px] border border-white/70 bg-[#fcf8e9]/94 shadow-[0_22px_60px_rgba(78,52,46,0.12)] backdrop-blur-xl";
@@ -177,10 +206,10 @@ function formatReviewIdentity(value: string | null) {
 
 function getReviewStatusLabel(status: number | null) {
   if (status === 2) return "완료";
-  if (status === 5) return "검수";
-  if (status === 6) return "보류";
-  if (status === 7) return "실패";
-  if (status === 8) return "취소";
+  if (status === 5) return "삭제등록";
+  if (status === 6) return "수정등록";
+  if (status === 7) return "수정요청";
+  if (status === 8) return "삭제요청";
   return status == null ? "-" : String(status);
 }
 
@@ -189,18 +218,64 @@ function getReviewStatusClassName(status: number | null) {
     return "bg-emerald-100 text-emerald-700 ring-1 ring-emerald-200";
   }
   if (status === 5) {
-    return "bg-sky-100 text-sky-700 ring-1 ring-sky-200";
+    return "bg-rose-100 text-rose-700 ring-1 ring-rose-200";
   }
   if (status === 6) {
     return "bg-amber-100 text-amber-700 ring-1 ring-amber-200";
   }
   if (status === 7) {
-    return "bg-rose-100 text-rose-700 ring-1 ring-rose-200";
+    return "bg-amber-100 text-amber-700 ring-1 ring-amber-200";
   }
   if (status === 8) {
-    return "bg-zinc-200 text-zinc-700 ring-1 ring-zinc-300";
+    return "bg-rose-100 text-rose-700 ring-1 ring-rose-200";
   }
   return "bg-[#fff0c8] text-[#8a5a00] ring-1 ring-[#f4d189]";
+}
+
+function getReviewMenuTone(status: number | null) {
+  if (status === 2) {
+    return {
+      trigger:
+        "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100",
+      panel: "border-emerald-200/80 bg-emerald-50/95",
+      divider: "bg-emerald-200/70",
+      primaryItem: "text-emerald-800 hover:bg-emerald-100",
+      dangerItem: "text-rose-600 hover:bg-rose-50",
+      neutralItem: "text-emerald-700/80 hover:bg-emerald-100/80",
+    };
+  }
+
+  if (status === 5 || status === 8) {
+    return {
+      trigger: "border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100",
+      panel: "border-rose-200/80 bg-rose-50/95",
+      divider: "bg-rose-200/70",
+      primaryItem: "text-rose-700 hover:bg-rose-100",
+      dangerItem: "text-rose-700 hover:bg-rose-100",
+      neutralItem: "text-rose-700/80 hover:bg-rose-100/80",
+    };
+  }
+
+  if (status === 6 || status === 7) {
+    return {
+      trigger: "border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100",
+      panel: "border-amber-200/80 bg-amber-50/95",
+      divider: "bg-amber-200/70",
+      primaryItem: "text-amber-800 hover:bg-amber-100",
+      dangerItem: "text-rose-600 hover:bg-rose-50",
+      neutralItem: "text-amber-800/80 hover:bg-amber-100/80",
+    };
+  }
+
+  return {
+    trigger:
+      "border-[#4e342e]/12 bg-white/85 text-[#4e342e] hover:bg-[#fff8e1]",
+    panel: "border-[#4e342e]/12 bg-[#fcf8e9]",
+    divider: "bg-[#4e342e]/10",
+    primaryItem: "text-[#4e342e] hover:bg-[#ffa000]/35",
+    dangerItem: "text-rose-600 hover:bg-rose-50",
+    neutralItem: "text-[#4e342e]/72 hover:bg-[#4e342e]/8",
+  };
 }
 
 function getScriptStatusLabel(status: string | null) {
@@ -267,8 +342,45 @@ function getPlaceIssueStatus(place: PlaceItem) {
   return Number(value) === 0 ? 0 : 1;
 }
 
+function getPlaceMenuButtonClassName() {
+  return "border-[#4e342e]/12 bg-white/85 text-[#4e342e] hover:bg-[#fff8e1] hover:text-[#4e342e]";
+}
+
+function getPlaceRowClassName(place: PlaceItem) {
+  if (Number(place.status ?? place.issue_status ?? 1) === 0) {
+    return "bg-[#ffe5e1]  hover:bg-[#fff1ef]";
+  }
+
+  if ((place.done ?? 0) >= (place.total ?? 0)) {
+    return "bg-[#ffefc2]  hover:bg-[#fff6db]";
+  }
+
+  if ((place.today ?? 0) >= (place.requested ?? 0)) {
+    return "bg-[#e2efff]  hover:bg-[#eff6ff]";
+  }
+
+  return "hover:bg-[#ffa000]/8";
+}
+
 function getPlaceDisplayName(place: PlaceItem | null) {
   return place?.name ?? place?.alias ?? "";
+}
+
+function parseStoredSortDir(value: string | null): "asc" | "desc" {
+  return value === "desc" ? "desc" : DEFAULT_SORT_DIR;
+}
+
+function parseStoredLoadLimit(value: string | null): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return DEFAULT_LOAD_LIMIT;
+  return Math.min(MAX_LOAD_LIMIT, Math.max(DEFAULT_LOAD_LIMIT, parsed));
+}
+
+function parseStoredPageSize(value: string | null): PageSizeOption {
+  if (value === "10" || value === "20" || value === "50" || value === "all") {
+    return value;
+  }
+  return "10";
 }
 
 function getReservationSelection(
@@ -295,13 +407,26 @@ function getReservationSelection(
 const NAVER_REVIEW_BASE_URL = "https://m.place.naver.com/my";
 
 export function HomeDashboard({ username }: { username?: string }) {
+  const [managerRole, setManagerRole] = useState<ManagerRole>("unknown");
   const [places, setPlaces] = useState<PlaceItem[]>([]);
   const [placesLoading, setPlacesLoading] = useState(true);
+  const [stats, setStats] = useState({
+    registeredPlaces: 0,
+    requestedWorkload: 0,
+    remainingWorkload: 0,
+    completedWorkload: 0,
+    completedPlaces: 0,
+  });
+  const [statsLoading, setStatsLoading] = useState(true);
+  const [placesLoadingMore, setPlacesLoadingMore] = useState(false);
+  const [placesHasMore, setPlacesHasMore] = useState(false);
+  const [placesNextOffset, setPlacesNextOffset] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
-  const [loadLimit, setLoadLimit] = useState(200);
-  const [pageSize, setPageSize] = useState("10");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">(DEFAULT_SORT_DIR);
+  const [loadLimit, setLoadLimit] = useState(DEFAULT_LOAD_LIMIT);
+  const [pageSize, setPageSize] = useState<PageSizeOption>("10");
+  const [settingsHydrated, setSettingsHydrated] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [openActionMenuId, setOpenActionMenuId] = useState<number | null>(null);
@@ -332,8 +457,10 @@ export function HomeDashboard({ username }: { username?: string }) {
   const [goodthingData, setGoodthingData] = useState<GoodthingUiData | null>(
     null,
   );
-  const [draftSortDir, setDraftSortDir] = useState<"asc" | "desc">("asc");
-  const [draftLoadLimit, setDraftLoadLimit] = useState(200);
+  const [draftSortDir, setDraftSortDir] = useState<"asc" | "desc">(
+    DEFAULT_SORT_DIR,
+  );
+  const [draftLoadLimit, setDraftLoadLimit] = useState(DEFAULT_LOAD_LIMIT);
   const [selectedPlaceForScriptReplace, setSelectedPlaceForScriptReplace] =
     useState<PlaceItem | null>(null);
   const [scriptReplaceModalOpen, setScriptReplaceModalOpen] = useState(false);
@@ -373,6 +500,92 @@ export function HomeDashboard({ username }: { username?: string }) {
   const manualUploadZipFileInputRef = useRef<HTMLInputElement>(null);
   const manualUploadPhotosZipFileInputRef = useRef<HTMLInputElement>(null);
   const manualUploadTxtFileInputRef = useRef<HTMLInputElement>(null);
+  const placesLoadMoreRef = useRef<HTMLDivElement>(null);
+  const [reviewMenuOpenId, setReviewMenuOpenId] = useState<number | null>(null);
+  const [reviewEditConfirmOpen, setReviewEditConfirmOpen] = useState(false);
+  const [reviewEditConfirmItem, setReviewEditConfirmItem] =
+    useState<ReviewItem | null>(null);
+  const [reviewActionSubmittingId, setReviewActionSubmittingId] = useState<
+    number | null
+  >(null);
+  const [reviewEditManageOpen, setReviewEditManageOpen] = useState(false);
+  const [reviewEditManageItem, setReviewEditManageItem] =
+    useState<ReviewItem | null>(null);
+  const [reviewEditManageTab, setReviewEditManageTab] = useState<
+    "script" | "images"
+  >("script");
+  const [reviewEditScriptContent, setReviewEditScriptContent] = useState("");
+  const [reviewEditScriptLoading, setReviewEditScriptLoading] = useState(false);
+  const [reviewEditScriptSaving, setReviewEditScriptSaving] = useState(false);
+  const [reviewEditImages, setReviewEditImages] = useState<ReviewImageItem[]>(
+    [],
+  );
+  const [reviewEditImagesVersion, setReviewEditImagesVersion] = useState(0);
+  const [reviewEditImagesLoading, setReviewEditImagesLoading] = useState(false);
+  const [reviewEditImagesUploading, setReviewEditImagesUploading] =
+    useState(false);
+  const [reviewEditImageDeletingId, setReviewEditImageDeletingId] = useState<
+    number | null
+  >(null);
+  const [reviewEditImagesDragActive, setReviewEditImagesDragActive] =
+    useState(false);
+  const [reviewEditSameExif, setReviewEditSameExif] = useState(false);
+  const reviewEditImagesInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadManagerRole = async () => {
+      try {
+        const res = await fetch("/api/account/me", { cache: "no-store" });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || cancelled) return;
+
+        const role =
+          typeof (data as { role?: string }).role === "string"
+            ? (data as { role: string }).role
+            : "";
+
+        if (role === "admin" || role === "parent" || role === "child") {
+          setManagerRole(role);
+        }
+      } catch {
+        if (!cancelled) setManagerRole("unknown");
+      }
+    };
+
+    void loadManagerRole();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    setSortDir(
+      parseStoredSortDir(window.localStorage.getItem(HOME_TABLE_SORT_KEY)),
+    );
+    setLoadLimit(
+      parseStoredLoadLimit(
+        window.localStorage.getItem(HOME_TABLE_LOAD_LIMIT_KEY),
+      ),
+    );
+    setPageSize(
+      parseStoredPageSize(
+        window.localStorage.getItem(HOME_TABLE_PAGE_SIZE_KEY),
+      ),
+    );
+    setSettingsHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!settingsHydrated || typeof window === "undefined") return;
+
+    window.localStorage.setItem(HOME_TABLE_SORT_KEY, sortDir);
+    window.localStorage.setItem(HOME_TABLE_LOAD_LIMIT_KEY, String(loadLimit));
+    window.localStorage.setItem(HOME_TABLE_PAGE_SIZE_KEY, pageSize);
+  }, [loadLimit, pageSize, settingsHydrated, sortDir]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -381,10 +594,67 @@ export function HomeDashboard({ username }: { username?: string }) {
     return () => window.clearTimeout(timer);
   }, [searchQuery]);
 
+  const loadMorePlaces = useCallback(async () => {
+    if (
+      !settingsHydrated ||
+      placesLoading ||
+      placesLoadingMore ||
+      !placesHasMore ||
+      placesNextOffset == null
+    ) {
+      return;
+    }
+
+    setPlacesLoadingMore(true);
+    try {
+      const params = new URLSearchParams({
+        offset: String(placesNextOffset),
+        limit: String(loadLimit),
+        q: debouncedSearch,
+        sort_by: "id",
+        sort_dir: sortDir,
+      });
+      const res = await fetch(`/api/management/places?${params.toString()}`, {
+        cache: "no-store",
+      });
+      const data = (await res.json().catch(() => ({}))) as PlacesResponse;
+
+      if (!res.ok) {
+        throw new Error(
+          typeof (data as { detail?: string }).detail === "string"
+            ? (data as { detail: string }).detail
+            : "플레이스 목록을 더 불러오지 못했습니다.",
+        );
+      }
+
+      const items = Array.isArray(data.items) ? data.items : [];
+      setPlaces((current) => [...current, ...items]);
+      setPlacesHasMore(data.has_more === true);
+      setPlacesNextOffset(
+        typeof data.next_offset === "number" ? data.next_offset : null,
+      );
+    } catch {
+      setPlacesHasMore(false);
+      setPlacesNextOffset(null);
+    } finally {
+      setPlacesLoadingMore(false);
+    }
+  }, [
+    debouncedSearch,
+    loadLimit,
+    placesHasMore,
+    placesLoading,
+    placesLoadingMore,
+    placesNextOffset,
+    settingsHydrated,
+    sortDir,
+  ]);
+
   useEffect(() => {
     let cancelled = false;
 
     const loadPlaces = async () => {
+      if (!settingsHydrated) return;
       setPlacesLoading(true);
       try {
         const params = new URLSearchParams({
@@ -409,9 +679,15 @@ export function HomeDashboard({ username }: { username?: string }) {
 
         if (cancelled) return;
         setPlaces(Array.isArray(data.items) ? data.items : []);
+        setPlacesHasMore(data.has_more === true);
+        setPlacesNextOffset(
+          typeof data.next_offset === "number" ? data.next_offset : null,
+        );
       } catch {
         if (cancelled) return;
         setPlaces([]);
+        setPlacesHasMore(false);
+        setPlacesNextOffset(null);
       } finally {
         if (!cancelled) setPlacesLoading(false);
       }
@@ -421,73 +697,126 @@ export function HomeDashboard({ username }: { username?: string }) {
     return () => {
       cancelled = true;
     };
-  }, [debouncedSearch, loadLimit, sortDir]);
+  }, [debouncedSearch, loadLimit, settingsHydrated, sortDir]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadPlaceStats = async () => {
+      setStatsLoading(true);
+      try {
+        const res = await fetch("/api/management/place-stats", {
+          cache: "no-store",
+        });
+        const data = (await res.json().catch(() => ({}))) as PlaceStatsResponse;
+
+        if (!res.ok) {
+          throw new Error(
+            typeof (data as { detail?: string }).detail === "string"
+              ? (data as { detail: string }).detail
+              : "플레이스 통계를 불러오지 못했습니다.",
+          );
+        }
+
+        if (cancelled) return;
+        setStats({
+          registeredPlaces: Number(data.registered_places ?? 0),
+          requestedWorkload: Number(data.requested_workload ?? 0),
+          remainingWorkload: Number(data.remaining_workload ?? 0),
+          completedWorkload: Number(data.completed_workload ?? 0),
+          completedPlaces: Number(data.completed_places ?? 0),
+        });
+      } catch {
+        if (cancelled) return;
+        setStats({
+          registeredPlaces: 0,
+          requestedWorkload: 0,
+          remainingWorkload: 0,
+          completedWorkload: 0,
+          completedPlaces: 0,
+        });
+      } finally {
+        setStatsLoading(false);
+      }
+    };
+
+    void loadPlaceStats();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     setCurrentPage(1);
   }, [debouncedSearch, pageSize, places.length, sortDir, loadLimit]);
 
   useEffect(() => {
+    if (pageSize !== "all") return;
+    const target = placesLoadMoreRef.current;
+    if (!target || placesLoading || placesLoadingMore || !placesHasMore) {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[0];
+        if (!entry?.isIntersecting) return;
+        void loadMorePlaces();
+      },
+      {
+        root: null,
+        rootMargin: "0px 0px 240px 0px",
+        threshold: 0.1,
+      },
+    );
+
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [loadMorePlaces, pageSize, placesHasMore, placesLoading, placesLoadingMore]);
+
+  useEffect(() => {
     const handlePointerDown = (event: MouseEvent) => {
       const target = event.target;
-      if (
-        target instanceof Element &&
-        target.closest("[data-action-menu-root='true']")
-      ) {
-        return;
+      if (!(target instanceof Element)) return;
+      if (!target.closest("[data-action-menu-root='true']")) {
+        setOpenActionMenuId(null);
       }
-      setOpenActionMenuId(null);
+      if (!target.closest("[data-review-menu-root='true']")) {
+        setReviewMenuOpenId(null);
+      }
     };
 
     document.addEventListener("mousedown", handlePointerDown);
     return () => document.removeEventListener("mousedown", handlePointerDown);
   }, []);
 
-  const stats = useMemo(() => {
-    const registeredPlaces = places.length;
-    const completedPlaces = places.filter(
-      (item) => item.remaining === 0,
-    ).length;
-    const completedWorkload = places.reduce((sum, item) => sum + item.done, 0);
-    const remainingWorkload = places.reduce(
-      (sum, item) => sum + item.remaining,
-      0,
-    );
-    const requestedWorkload = places.reduce(
-      (sum, item) => sum + item.requested,
-      0,
-    );
-    const todayTarget = places.reduce(
-      (sum, item) => sum + item.today_target,
-      0,
-    );
-
-    return {
-      registeredPlaces,
-      completedPlaces,
-      completedWorkload,
-      remainingWorkload,
-      requestedWorkload,
-      todayTarget,
-    };
-  }, [places]);
-
-  const totalPages = Math.max(
-    1,
-    Math.ceil(places.length / Number(pageSize || 10)),
-  );
+  const isAllPageSize = pageSize === "all";
+  const effectivePageSize = isAllPageSize ? Math.max(places.length, 1) : Number(pageSize || 10);
+  const totalPages = Math.max(1, Math.ceil(places.length / effectivePageSize));
   const safeCurrentPage = Math.min(Math.max(currentPage, 1), totalPages);
 
   const paginatedPlaces = useMemo(() => {
-    const size = Number(pageSize || 10);
+    if (isAllPageSize) {
+      return places;
+    }
+    const size = effectivePageSize;
     const start = (safeCurrentPage - 1) * size;
     return places.slice(start, start + size);
-  }, [pageSize, places, safeCurrentPage]);
+  }, [effectivePageSize, isAllPageSize, places, safeCurrentPage]);
 
   const pageStart =
     places.length === 0
       ? 0
-      : (safeCurrentPage - 1) * Number(pageSize || 10) + 1;
+      : isAllPageSize
+        ? 1
+        : (safeCurrentPage - 1) * effectivePageSize + 1;
+
+  const tableSkeletonRows = useMemo(() => {
+    if (pageSize === "all") return 8;
+    const n = Number(pageSize);
+    return Number.isFinite(n) ? Math.min(Math.max(n, 6), 12) : 8;
+  }, [pageSize]);
+
   const openSettingsModal = () => {
     setDraftSortDir(sortDir);
     setDraftLoadLimit(loadLimit);
@@ -1085,6 +1414,358 @@ export function HomeDashboard({ username }: { username?: string }) {
     }
   };
 
+  const callUpdateReviewStatus = async (
+    review: ReviewItem,
+    targetStatus: number,
+  ): Promise<boolean> => {
+    if (review.job_id == null || review.receipt_id == null) {
+      toast.error("작업 정보를 확인할 수 없습니다.");
+      return false;
+    }
+
+    setReviewActionSubmittingId(review.job_id);
+    try {
+      const res = await fetch("/api/admin/job/update-status", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          job_id: review.job_id,
+          status: targetStatus,
+          receipt_id: review.receipt_id,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        throw new Error(
+          typeof (data as { detail?: string }).detail === "string"
+            ? (data as { detail: string }).detail
+            : typeof (data as { error?: string }).error === "string"
+              ? (data as { error: string }).error
+              : "요청 처리에 실패했습니다.",
+        );
+      }
+
+      if ((data as { success?: boolean }).success === false) {
+        throw new Error(
+          typeof (data as { error?: string }).error === "string"
+            ? (data as { error: string }).error
+            : "상태 변경 조건이 맞지 않습니다.",
+        );
+      }
+
+      const nextStatus = targetStatus === 99 ? 2 : targetStatus;
+      setReviews((prev) =>
+        prev.map((r) =>
+          r.job_id === review.job_id ? { ...r, status: nextStatus } : r,
+        ),
+      );
+      return true;
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "요청 처리에 실패했습니다.",
+      );
+      return false;
+    } finally {
+      setReviewActionSubmittingId(null);
+    }
+  };
+
+  const handleReviewDelete = async (review: ReviewItem) => {
+    setReviewMenuOpenId(null);
+    const ok = await callUpdateReviewStatus(review, 8);
+    if (ok) toast.success("삭제 요청이 완료되었습니다.");
+  };
+
+  const handleReviewCancel = async (review: ReviewItem) => {
+    setReviewMenuOpenId(null);
+    const ok = await callUpdateReviewStatus(review, 99);
+    if (ok) toast.success("요청 취소가 완료되었습니다.");
+  };
+
+  const handleReviewRegisterEdit = async (review: ReviewItem) => {
+    setReviewMenuOpenId(null);
+    const ok = await callUpdateReviewStatus(review, 6);
+    if (ok) toast.success("수정 등록이 완료되었습니다.");
+  };
+
+  const handleReviewRegisterDelete = async (review: ReviewItem) => {
+    setReviewMenuOpenId(null);
+    const ok = await callUpdateReviewStatus(review, 5);
+    if (ok) toast.success("삭제 등록이 완료되었습니다.");
+  };
+
+  const closeReviewEditManage = () => {
+    if (
+      reviewEditScriptSaving ||
+      reviewEditImagesUploading ||
+      reviewEditImageDeletingId != null
+    ) {
+      return;
+    }
+    setReviewEditManageOpen(false);
+    setReviewEditManageItem(null);
+    setReviewEditManageTab("script");
+    setReviewEditScriptContent("");
+    setReviewEditScriptLoading(false);
+    setReviewEditScriptSaving(false);
+    setReviewEditImages([]);
+    setReviewEditImagesVersion(0);
+    setReviewEditImagesLoading(false);
+    setReviewEditImagesUploading(false);
+    setReviewEditImageDeletingId(null);
+    setReviewEditImagesDragActive(false);
+    setReviewEditSameExif(false);
+    if (reviewEditImagesInputRef.current) {
+      reviewEditImagesInputRef.current.value = "";
+    }
+  };
+
+  const loadReviewEditScript = async (scriptId: number) => {
+    setReviewEditScriptLoading(true);
+    try {
+      const res = await fetch(`/api/review-scripts/${scriptId}`, {
+        cache: "no-store",
+      });
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        throw new Error(
+          typeof (data as { detail?: string }).detail === "string"
+            ? (data as { detail: string }).detail
+            : "원고 내용을 불러오지 못했습니다.",
+        );
+      }
+
+      setReviewEditScriptContent(
+        typeof (data as { content?: string }).content === "string"
+          ? (data as { content: string }).content
+          : "",
+      );
+    } catch (error) {
+      setReviewEditScriptContent("");
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "원고 내용을 불러오지 못했습니다.",
+      );
+    } finally {
+      setReviewEditScriptLoading(false);
+    }
+  };
+
+  const loadReviewEditImages = async (receiptId: number) => {
+    setReviewEditImagesLoading(true);
+    try {
+      const res = await fetch(`/api/review-receipts/${receiptId}/images`, {
+        cache: "no-store",
+      });
+      const data = (await res.json().catch(() => null)) as
+        | ReviewImageItem[]
+        | { detail?: string }
+        | null;
+
+      if (!res.ok) {
+        throw new Error(
+          typeof data === "object" &&
+            data !== null &&
+            !Array.isArray(data) &&
+            typeof data.detail === "string"
+            ? data.detail
+            : "이미지 목록을 불러오지 못했습니다.",
+        );
+      }
+
+      setReviewEditImages(Array.isArray(data) ? data : []);
+      setReviewEditImagesVersion(Date.now());
+    } catch (error) {
+      setReviewEditImages([]);
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "이미지 목록을 불러오지 못했습니다.",
+      );
+    } finally {
+      setReviewEditImagesLoading(false);
+    }
+  };
+
+  const openReviewEditManage = async (review: ReviewItem) => {
+    if (review.script_id == null || review.receipt_id == null) {
+      toast.error("원고/이미지 관리에 필요한 정보가 없습니다.");
+      return;
+    }
+
+    setReviewMenuOpenId(null);
+    setReviewEditManageItem(review);
+    setReviewEditManageTab("script");
+    setReviewEditManageOpen(true);
+    setReviewEditImages([]);
+    setReviewEditScriptContent("");
+    setReviewEditSameExif(false);
+    if (reviewEditImagesInputRef.current) {
+      reviewEditImagesInputRef.current.value = "";
+    }
+
+    await Promise.all([
+      loadReviewEditScript(review.script_id),
+      loadReviewEditImages(review.receipt_id),
+    ]);
+  };
+
+  const handleSaveReviewEditScript = async () => {
+    if (reviewEditManageItem?.script_id == null) {
+      toast.error("원고 정보를 확인할 수 없습니다.");
+      return;
+    }
+
+    setReviewEditScriptSaving(true);
+    try {
+      const res = await fetch(
+        `/api/review-scripts/${reviewEditManageItem.script_id}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ content: reviewEditScriptContent }),
+        },
+      );
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        throw new Error(
+          typeof (data as { detail?: string }).detail === "string"
+            ? (data as { detail: string }).detail
+            : "원고 저장에 실패했습니다.",
+        );
+      }
+
+      toast.success("원고가 저장되었습니다.");
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "원고 저장에 실패했습니다.",
+      );
+    } finally {
+      setReviewEditScriptSaving(false);
+    }
+  };
+
+  const uploadReviewEditImages = async (files: File[]) => {
+    if (reviewEditManageItem?.receipt_id == null) {
+      toast.error("영수증 정보를 확인할 수 없습니다.");
+      return;
+    }
+    if (files.length === 0) return;
+
+    const invalidFile = files.find((file) => {
+      const lowerName = file.name.toLowerCase();
+      return !(
+        lowerName.endsWith(".jpg") ||
+        lowerName.endsWith(".jpeg") ||
+        lowerName.endsWith(".png")
+      );
+    });
+
+    if (invalidFile) {
+      toast.error("JPG, JPEG, PNG 파일만 업로드할 수 있습니다.");
+      return;
+    }
+
+    setReviewEditImagesUploading(true);
+    try {
+      const formData = new FormData();
+      files.forEach((file) => formData.append("files", file));
+      formData.append("same_exif", reviewEditSameExif ? "true" : "false");
+
+      const res = await fetch(
+        `/api/review-receipts/${reviewEditManageItem.receipt_id}/images`,
+        {
+          method: "POST",
+          body: formData,
+        },
+      );
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        throw new Error(
+          typeof (data as { detail?: string }).detail === "string"
+            ? (data as { detail: string }).detail
+            : "이미지 업로드에 실패했습니다.",
+        );
+      }
+
+      toast.success("이미지가 업로드되었습니다.");
+      if (reviewEditImagesInputRef.current) {
+        reviewEditImagesInputRef.current.value = "";
+      }
+      await loadReviewEditImages(reviewEditManageItem.receipt_id);
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "이미지 업로드에 실패했습니다.",
+      );
+    } finally {
+      setReviewEditImagesUploading(false);
+      setReviewEditImagesDragActive(false);
+    }
+  };
+
+  const handleDeleteReviewImage = async (imageId: number) => {
+    if (reviewEditManageItem?.receipt_id == null) {
+      toast.error("영수증 정보를 확인할 수 없습니다.");
+      return;
+    }
+
+    setReviewEditImageDeletingId(imageId);
+    try {
+      const res = await fetch(`/api/review-images/${imageId}`, {
+        method: "DELETE",
+      });
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        throw new Error(
+          typeof (data as { detail?: string }).detail === "string"
+            ? (data as { detail: string }).detail
+            : "이미지 삭제에 실패했습니다.",
+        );
+      }
+
+      toast.success("이미지가 삭제되었습니다.");
+      await loadReviewEditImages(reviewEditManageItem.receipt_id);
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "이미지 삭제에 실패했습니다.",
+      );
+    } finally {
+      setReviewEditImageDeletingId(null);
+    }
+  };
+
+  const openReviewEditConfirm = (review: ReviewItem) => {
+    setReviewMenuOpenId(null);
+    setReviewEditConfirmItem(review);
+    setReviewEditConfirmOpen(true);
+  };
+
+  const closeReviewEditConfirm = () => {
+    if (reviewActionSubmittingId != null) return;
+    setReviewEditConfirmOpen(false);
+    setReviewEditConfirmItem(null);
+  };
+
+  const handleConfirmReviewEdit = async () => {
+    if (!reviewEditConfirmItem) return;
+    const ok = await callUpdateReviewStatus(reviewEditConfirmItem, 7);
+    if (ok) {
+      toast.success("수정 요청이 완료되었습니다.");
+      const review = reviewEditConfirmItem;
+      setReviewEditConfirmOpen(false);
+      setReviewEditConfirmItem(null);
+      await openReviewEditManage(review);
+    }
+  };
+
   const closeManualUploadModal = () => {
     setManualUploadModalOpen(false);
     setSelectedPlaceForManualUpload(null);
@@ -1254,10 +1935,14 @@ export function HomeDashboard({ username }: { username?: string }) {
               </span>
             </div>
             <div className="text-3xl text-[#4e342e]">
-              <NumberCounter
-                value={stats.registeredPlaces}
-                className="text-3xl text-[#4e342e]"
-              />
+              {statsLoading ? (
+                <Skeleton className="h-9 w-[7.5rem] rounded-xl bg-[#4e342e]/10" />
+              ) : (
+                <NumberCounter
+                  value={stats.registeredPlaces}
+                  className="text-3xl text-[#4e342e]"
+                />
+              )}
             </div>
           </div>
         </motion.div>
@@ -1276,10 +1961,14 @@ export function HomeDashboard({ username }: { username?: string }) {
               </span>
             </div>
             <div className="text-3xl text-[#4e342e]">
-              <NumberCounter
-                value={stats.requestedWorkload}
-                className="text-3xl text-[#4e342e]"
-              />
+              {statsLoading ? (
+                <Skeleton className="h-9 w-[7.5rem] rounded-xl bg-[#4e342e]/10" />
+              ) : (
+                <NumberCounter
+                  value={stats.requestedWorkload}
+                  className="text-3xl text-[#4e342e]"
+                />
+              )}
             </div>
           </div>
         </motion.div>
@@ -1298,10 +1987,14 @@ export function HomeDashboard({ username }: { username?: string }) {
               </span>
             </div>
             <div className="text-3xl text-[#4e342e]">
-              <NumberCounter
-                value={stats.remainingWorkload}
-                className="text-3xl text-[#4e342e]"
-              />
+              {statsLoading ? (
+                <Skeleton className="h-9 w-[7.5rem] rounded-xl bg-[#4e342e]/10" />
+              ) : (
+                <NumberCounter
+                  value={stats.remainingWorkload}
+                  className="text-3xl text-[#4e342e]"
+                />
+              )}
             </div>
           </div>
         </motion.div>
@@ -1320,10 +2013,14 @@ export function HomeDashboard({ username }: { username?: string }) {
               </span>
             </div>
             <div className="text-3xl text-[#4e342e]">
-              <NumberCounter
-                value={stats.completedWorkload}
-                className="text-3xl text-[#4e342e]"
-              />
+              {statsLoading ? (
+                <Skeleton className="h-9 w-[7.5rem] rounded-xl bg-[#4e342e]/10" />
+              ) : (
+                <NumberCounter
+                  value={stats.completedWorkload}
+                  className="text-3xl text-[#4e342e]"
+                />
+              )}
             </div>
           </div>
         </motion.div>
@@ -1342,10 +2039,14 @@ export function HomeDashboard({ username }: { username?: string }) {
               </span>
             </div>
             <div className="text-3xl text-[#4e342e]">
-              <NumberCounter
-                value={stats.completedPlaces}
-                className="text-3xl text-[#4e342e]"
-              />
+              {statsLoading ? (
+                <Skeleton className="h-9 w-[7.5rem] rounded-xl bg-[#4e342e]/10" />
+              ) : (
+                <NumberCounter
+                  value={stats.completedPlaces}
+                  className="text-3xl text-[#4e342e]"
+                />
+              )}
             </div>
           </div>
         </motion.div>
@@ -1372,7 +2073,12 @@ export function HomeDashboard({ username }: { username?: string }) {
                 <div className="text-sm text-[#4e342e]/65">
                   <div className="flex items-center gap-2 text-sm text-[#4e342e]/68">
                     <span>표시 개수</span>
-                    <Select value={pageSize} onValueChange={setPageSize}>
+                    <Select
+                      value={pageSize}
+                      onValueChange={(value) =>
+                        setPageSize(value as PageSizeOption)
+                      }
+                    >
                       <SelectTrigger className="h-10 w-[110px] rounded-full bg-white/85">
                         <SelectValue />
                       </SelectTrigger>
@@ -1380,6 +2086,7 @@ export function HomeDashboard({ username }: { username?: string }) {
                         <SelectItem value="10">10개씩</SelectItem>
                         <SelectItem value="20">20개씩</SelectItem>
                         <SelectItem value="50">50개씩</SelectItem>
+                        <SelectItem value="all">전체</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -1387,53 +2094,67 @@ export function HomeDashboard({ username }: { username?: string }) {
               </div>
 
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-                <div className="flex items-center gap-1">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-9 w-9 rounded-full text-[#4e342e]"
-                    onClick={() => setCurrentPage(1)}
-                    disabled={safeCurrentPage === 1}
-                  >
-                    {"<<"}
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-9 w-9 rounded-full text-[#4e342e]"
-                    onClick={() =>
-                      setCurrentPage((current) => Math.max(1, current - 1))
-                    }
-                    disabled={safeCurrentPage === 1}
-                  >
-                    <ChevronLeft className="h-4 w-4" />
-                  </Button>
-                  <div className="min-w-[52px] text-center text-sm font-semibold text-[#4e342e]">
-                    {safeCurrentPage}/{totalPages}
+                {isAllPageSize ? (
+                  <div className="flex items-center gap-2 rounded-full border border-[#4e342e]/10 bg-white/80 px-4 py-2 text-sm font-semibold text-[#4e342e]/72">
+                    {placesLoadingMore && (
+                      <RefreshCw className="h-4 w-4 animate-spin text-[#c27400]" />
+                    )}
+                    <span>
+                      {paginatedPlaces.length.toLocaleString("ko-KR")}개 표시
+                      {placesHasMore
+                        ? ` · ${loadLimit.toLocaleString("ko-KR")}개씩 추가 로딩`
+                        : ""}
+                    </span>
                   </div>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-9 w-9 rounded-full text-[#4e342e]"
-                    onClick={() =>
-                      setCurrentPage((current) =>
-                        Math.min(totalPages, current + 1),
-                      )
-                    }
-                    disabled={safeCurrentPage === totalPages}
-                  >
-                    <ChevronRight className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-9 w-9 rounded-full text-[#4e342e]"
-                    onClick={() => setCurrentPage(totalPages)}
-                    disabled={safeCurrentPage === totalPages}
-                  >
-                    {">>"}
-                  </Button>
-                </div>
+                ) : (
+                  <div className="flex items-center gap-1">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-9 w-9 rounded-full text-[#4e342e]"
+                      onClick={() => setCurrentPage(1)}
+                      disabled={safeCurrentPage === 1}
+                    >
+                      {"<<"}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-9 w-9 rounded-full text-[#4e342e]"
+                      onClick={() =>
+                        setCurrentPage((current) => Math.max(1, current - 1))
+                      }
+                      disabled={safeCurrentPage === 1}
+                    >
+                      <ChevronLeft className="h-4 w-4" />
+                    </Button>
+                    <div className="min-w-[52px] text-center text-sm font-semibold text-[#4e342e]">
+                      {safeCurrentPage}/{totalPages}
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-9 w-9 rounded-full text-[#4e342e]"
+                      onClick={() =>
+                        setCurrentPage((current) =>
+                          Math.min(totalPages, current + 1),
+                        )
+                      }
+                      disabled={safeCurrentPage === totalPages}
+                    >
+                      <ChevronRight className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-9 w-9 rounded-full text-[#4e342e]"
+                      onClick={() => setCurrentPage(totalPages)}
+                      disabled={safeCurrentPage === totalPages}
+                    >
+                      {">>"}
+                    </Button>
+                  </div>
+                )}
 
                 <div className="relative w-full sm:w-[260px]">
                   <PackageSearch className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-[#4e342e]/35" />
@@ -1450,58 +2171,113 @@ export function HomeDashboard({ username }: { username?: string }) {
             <div className="min-h-[520px] overflow-visible rounded-[24px] border border-[#4e342e]/10 bg-white/78">
               <Table className="border-collapse bg-white/75">
                 <TableHeader>
-                  <TableRow className="border-b border-[#4e342e]/10 bg-[#ffedc8] hover:bg-[#ffedc8]">
-                    <TableHead className="h-10 min-w-[56px] bg-[#ffedc8] px-3 py-2 text-center text-[14px] font-semibold text-[#4e342e]">
+                  <TableRow className="border-b border-[#4e342e]/10 bg-white hover:bg-white">
+                    <TableHead className="h-10 min-w-[56px] bg-white px-3 py-2 text-center text-[14px] font-semibold text-[#4e342e]">
                       #
                     </TableHead>
-                    <TableHead className="h-10 min-w-[160px] bg-[#ffedc8] px-3 py-2 text-center text-[14px] font-semibold text-[#4e342e]">
+                    <TableHead className="h-10 min-w-[160px] bg-white px-3 py-2 text-center text-[14px] font-semibold text-[#4e342e]">
                       플레이스명
                     </TableHead>
-                    <TableHead className="h-10 min-w-[120px] bg-[#ffedc8] px-3 py-2 text-center text-[14px] font-semibold text-[#4e342e]">
+                    <TableHead className="h-10 min-w-[120px] bg-white px-3 py-2 text-center text-[14px] font-semibold text-[#4e342e]">
                       플레이스 MID
                     </TableHead>
-                    <TableHead className="h-10 min-w-[76px] bg-[#ffedc8] px-3 py-2 text-center text-[14px] font-semibold text-[#4e342e]">
+                    <TableHead className="h-10 min-w-[76px] bg-white px-3 py-2 text-center text-[14px] font-semibold text-[#4e342e]">
                       완료
                     </TableHead>
-                    <TableHead className="h-10 min-w-[92px] bg-[#ffedc8] px-3 py-2 text-center text-[14px] font-semibold text-[#4e342e]">
+                    <TableHead className="h-10 min-w-[92px] bg-white px-3 py-2 text-center text-[14px] font-semibold text-[#4e342e]">
                       인식오류
                     </TableHead>
-                    <TableHead className="h-10 min-w-[108px] bg-[#ffedc8] px-3 py-2 text-center text-[14px] font-semibold text-[#4e342e]">
+                    <TableHead className="h-10 min-w-[108px] bg-white px-3 py-2 text-center text-[14px] font-semibold text-[#4e342e]">
                       남은 작업량
                     </TableHead>
-                    <TableHead className="h-10 min-w-[108px] bg-[#ffedc8] px-3 py-2 text-center text-[14px] font-semibold text-[#4e342e]">
+                    <TableHead className="h-10 min-w-[108px] bg-white px-3 py-2 text-center text-[14px] font-semibold text-[#4e342e]">
                       잔여 영수증
                     </TableHead>
-                    <TableHead className="h-10 min-w-[108px] bg-[#ffedc8] px-3 py-2 text-center text-[14px] font-semibold text-[#4e342e]">
+                    <TableHead className="h-10 min-w-[108px] bg-white px-3 py-2 text-center text-[14px] font-semibold text-[#4e342e]">
                       잔여 원고
                     </TableHead>
-                    <TableHead className="h-10 min-w-[108px] bg-[#ffedc8] px-3 py-2 text-center text-[14px] font-semibold text-[#4e342e]">
+                    <TableHead className="h-10 min-w-[108px] bg-white px-3 py-2 text-center text-[14px] font-semibold text-[#4e342e]">
                       요청 작업량
                     </TableHead>
-                    <TableHead className="h-10 min-w-[104px] bg-[#ffedc8] px-3 py-2 text-center text-[14px] font-semibold text-[#4e342e]">
+                    <TableHead className="h-10 min-w-[104px] bg-white px-3 py-2 text-center text-[14px] font-semibold text-[#4e342e]">
                       발행시작일
                     </TableHead>
-                    <TableHead className="h-10 min-w-[108px] bg-[#ffedc8] px-3 py-2 text-center text-[14px] font-semibold text-[#4e342e]">
+                    <TableHead className="h-10 min-w-[108px] bg-white px-3 py-2 text-center text-[14px] font-semibold text-[#4e342e]">
                       오늘 작업량
                     </TableHead>
-                    <TableHead className="h-10 min-w-[132px] bg-[#ffedc8] px-3 py-2 text-center text-[14px] font-semibold text-[#4e342e]">
+                    <TableHead className="h-10 min-w-[132px] bg-white px-3 py-2 text-center text-[14px] font-semibold text-[#4e342e]">
                       Actions
                     </TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {paginatedPlaces.map((item, index) => {
+                  {placesLoading
+                    ? Array.from({ length: tableSkeletonRows }).map(
+                        (_, rowIndex) => (
+                          <TableRow
+                            key={`place-skeleton-${rowIndex}`}
+                            className="border-b border-[#4e342e]/8"
+                          >
+                            <TableCell className="px-3 py-2.5 text-center">
+                              <Skeleton className="mx-auto h-4 w-8 rounded-md bg-[#4e342e]/10" />
+                            </TableCell>
+                            <TableCell className="px-3 py-2.5 text-center">
+                              <Skeleton className="mx-auto h-4 w-full max-w-[160px] rounded-md bg-[#4e342e]/10" />
+                            </TableCell>
+                            <TableCell className="px-3 py-2.5 text-center">
+                              <Skeleton className="mx-auto h-4 w-20 rounded-md bg-[#4e342e]/10" />
+                            </TableCell>
+                            <TableCell className="px-3 py-2.5 text-center">
+                              <Skeleton className="mx-auto h-4 w-10 rounded-md bg-[#4e342e]/10" />
+                            </TableCell>
+                            <TableCell className="px-3 py-2.5 text-center">
+                              <Skeleton className="mx-auto h-4 w-10 rounded-md bg-[#4e342e]/10" />
+                            </TableCell>
+                            <TableCell className="px-3 py-2.5 text-center">
+                              <Skeleton className="mx-auto h-4 w-12 rounded-md bg-[#4e342e]/10" />
+                            </TableCell>
+                            <TableCell className="px-3 py-2.5 text-center">
+                              <Skeleton className="mx-auto h-4 w-12 rounded-md bg-[#4e342e]/10" />
+                            </TableCell>
+                            <TableCell className="px-3 py-2.5 text-center">
+                              <Skeleton className="mx-auto h-4 w-12 rounded-md bg-[#4e342e]/10" />
+                            </TableCell>
+                            <TableCell className="px-3 py-2.5 text-center">
+                              <Skeleton className="mx-auto h-4 w-12 rounded-md bg-[#4e342e]/10" />
+                            </TableCell>
+                            <TableCell className="px-3 py-2.5 text-center">
+                              <Skeleton className="mx-auto h-4 w-16 rounded-md bg-[#4e342e]/10" />
+                            </TableCell>
+                            <TableCell className="px-3 py-2.5 text-center">
+                              <Skeleton className="mx-auto h-4 w-20 rounded-md bg-[#4e342e]/10" />
+                            </TableCell>
+                            <TableCell className="px-3 py-2.5 text-center">
+                              <div className="flex items-center justify-center gap-2">
+                                <Skeleton className="h-9 w-9 shrink-0 rounded-full bg-[#4e342e]/10" />
+                                <Skeleton className="h-9 w-9 shrink-0 rounded-full bg-[#4e342e]/10" />
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        ),
+                      )
+                    : paginatedPlaces.map((item, index) => {
                     const issueStatus = getPlaceIssueStatus(item);
                     const isIssuePaused = issueStatus === 0;
                     const issueActionLabel = isIssuePaused
                       ? "발행 시작"
                       : "발행 중지";
                     const IssueActionIcon = isIssuePaused ? Play : Pause;
+                    const placeRowClassName = getPlaceRowClassName(item);
+                    const placeMenuButtonClassName =
+                      getPlaceMenuButtonClassName();
 
                     return (
                       <TableRow
                         key={item.pid}
-                        className="border-b border-[#4e342e]/8 hover:bg-[#ffa000]/8"
+                        className={cn(
+                          "border-b border-[#4e342e]/8",
+                          placeRowClassName,
+                        )}
                       >
                         <TableCell className="px-3 py-2 text-center text-[14px] text-[#4e342e]/80">
                           {pageStart + index}
@@ -1564,9 +2340,7 @@ export function HomeDashboard({ username }: { username?: string }) {
                               type="button"
                               className={cn(
                                 "inline-flex h-9 w-9 items-center justify-center rounded-full border transition hover:shadow-sm",
-                                isIssuePaused
-                                  ? "border-[#4e342e]/12 bg-white/85 text-[#4e342e] hover:bg-[#fff8e1] hover:text-[#4e342e]"
-                                  : "border-[#ffa000]/45 bg-[#ffa000]/40 text-[#4e342e] hover:bg-[#ffa000]/50 hover:text-[#4e342e]",
+                                placeMenuButtonClassName,
                               )}
                               aria-label="메뉴"
                               title="메뉴"
@@ -1675,11 +2449,30 @@ export function HomeDashboard({ username }: { username?: string }) {
               </Table>
             </div>
 
-            {(placesLoading || places.length === 0) && (
+            {isAllPageSize && places.length > 0 && (
+              <div
+                ref={placesLoadMoreRef}
+                className="mt-4 flex min-h-12 items-center justify-center rounded-[18px] border border-dashed border-[#4e342e]/12 bg-white/55 px-4 text-sm text-[#4e342e]/58"
+              >
+                {placesLoadingMore ? (
+                  <div className="flex items-center gap-2">
+                    <RefreshCw className="h-4 w-4 animate-spin text-[#c27400]" />
+                    <span>
+                      {loadLimit.toLocaleString("ko-KR")}개씩 추가로 불러오는
+                      중입니다.
+                    </span>
+                  </div>
+                ) : placesHasMore ? (
+                  "스크롤하면 다음 데이터를 이어서 불러옵니다."
+                ) : (
+                  "모든 데이터를 불러왔습니다."
+                )}
+              </div>
+            )}
+
+            {!placesLoading && places.length === 0 && (
               <div className="rounded-2xl border border-dashed border-[#4e342e]/15 bg-white/60 px-4 py-10 text-center text-sm text-[#4e342e]/55">
-                {placesLoading
-                  ? "플레이스 목록을 불러오는 중입니다."
-                  : "표시할 플레이스가 없습니다."}
+                표시할 플레이스가 없습니다.
               </div>
             )}
           </div>
@@ -1885,6 +2678,20 @@ export function HomeDashboard({ username }: { username?: string }) {
                         ? `${NAVER_REVIEW_BASE_URL}/${encodeURIComponent(review.user_code)}/reviewfeed?reviewId=${encodeURIComponent(review.review_id)}`
                         : "-";
 
+                    const st = review.status;
+                    const reviewMenuTone = getReviewMenuTone(st);
+                    const canEdit = st !== 7;
+                    const canDelete = st !== 8;
+                    const canCancel =
+                      st === 5 || st === 6 || st === 7 || st === 8;
+                    const showEditManage = st === 7;
+                    const showRegisterEdit =
+                      managerRole === "admin" && st === 7;
+                    const showRegisterDelete =
+                      managerRole === "admin" && st === 8;
+                    const isSubmitting =
+                      reviewActionSubmittingId === review.job_id;
+
                     return (
                       <TableRow
                         key={`${review.job_id ?? review.review_id ?? index}`}
@@ -1933,15 +2740,137 @@ export function HomeDashboard({ username }: { username?: string }) {
                             {getReviewStatusLabel(review.status)}
                           </span>
                         </TableCell>
-                        <TableCell className="px-3 py-2 text-center">
-                          <button
-                            type="button"
-                            className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-[#4e342e]/12 bg-white/85 text-[#4e342e] transition hover:bg-[#fff8e1] hover:text-[#4e342e] hover:shadow-sm"
-                            aria-label="리뷰 메뉴"
-                            title="리뷰 메뉴"
+                        <TableCell className="relative px-3 py-2 text-center">
+                          <div
+                            className="relative inline-block"
+                            data-review-menu-root="true"
                           >
-                            <Ellipsis className="h-4 w-4" />
-                          </button>
+                            <button
+                              type="button"
+                              className={cn(
+                                "inline-flex h-9 w-9 items-center justify-center rounded-full border transition hover:shadow-sm",
+                                reviewMenuTone.trigger,
+                                isSubmitting && "opacity-50",
+                              )}
+                              aria-label="리뷰 메뉴"
+                              disabled={isSubmitting}
+                              onClick={() =>
+                                setReviewMenuOpenId((prev) =>
+                                  prev === review.job_id
+                                    ? null
+                                    : (review.job_id ?? null),
+                                )
+                              }
+                            >
+                              <Ellipsis className="h-4 w-4" />
+                            </button>
+
+                            {reviewMenuOpenId === review.job_id && (
+                              <motion.div
+                                className={cn(
+                                  "absolute right-0 z-30 w-[180px] overflow-hidden rounded-[20px] border p-1.5 text-left shadow-[0_16px_36px_rgba(78,52,46,0.14)]",
+                                  reviewMenuTone.panel,
+                                )}
+                                style={{ top: "calc(100% + 6px)" }}
+                                initial={{ opacity: 0, y: -6 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                transition={{ duration: 0.15 }}
+                                onMouseDown={(e) => e.stopPropagation()}
+                              >
+                                <button
+                                  type="button"
+                                  disabled={!canEdit}
+                                  className={cn(
+                                    "flex w-full items-center gap-2.5 rounded-[14px] px-3 py-2 text-sm font-medium transition",
+                                    canEdit
+                                      ? reviewMenuTone.primaryItem
+                                      : "cursor-not-allowed text-[#4e342e]/35",
+                                  )}
+                                  onClick={() => openReviewEditConfirm(review)}
+                                >
+                                  수정요청
+                                </button>
+                                {showEditManage && (
+                                  <button
+                                    type="button"
+                                    className={cn(
+                                      "flex w-full items-center gap-2.5 rounded-[14px] px-3 py-2 text-sm font-medium transition",
+                                      reviewMenuTone.primaryItem,
+                                    )}
+                                    onClick={() =>
+                                      void openReviewEditManage(review)
+                                    }
+                                  >
+                                    원고수정
+                                  </button>
+                                )}
+                                {showRegisterEdit && (
+                                  <button
+                                    type="button"
+                                    className={cn(
+                                      "flex w-full items-center gap-2.5 rounded-[14px] px-3 py-2 text-sm font-medium transition",
+                                      reviewMenuTone.primaryItem,
+                                    )}
+                                    onClick={() =>
+                                      void handleReviewRegisterEdit(review)
+                                    }
+                                  >
+                                    수정등록
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  disabled={!canDelete}
+                                  className={cn(
+                                    "flex w-full items-center gap-2.5 rounded-[14px] px-3 py-2 text-sm font-medium transition",
+                                    canDelete
+                                      ? reviewMenuTone.dangerItem
+                                      : "cursor-not-allowed text-rose-300",
+                                  )}
+                                  onClick={() =>
+                                    void handleReviewDelete(review)
+                                  }
+                                >
+                                  삭제요청
+                                </button>
+                                {showRegisterDelete && (
+                                  <button
+                                    type="button"
+                                    className={cn(
+                                      "flex w-full items-center gap-2.5 rounded-[14px] px-3 py-2 text-sm font-medium transition",
+                                      reviewMenuTone.dangerItem,
+                                    )}
+                                    onClick={() =>
+                                      void handleReviewRegisterDelete(review)
+                                    }
+                                  >
+                                    삭제등록
+                                  </button>
+                                )}
+                                <div
+                                  className={cn(
+                                    "my-1 h-px",
+                                    reviewMenuTone.divider,
+                                  )}
+                                />
+                                <button
+                                  type="button"
+                                  disabled={!canCancel}
+                                  className={cn(
+                                    "flex w-full items-center gap-2.5 rounded-[14px] px-3 py-2 text-sm font-medium transition",
+                                    canCancel
+                                      ? reviewMenuTone.neutralItem
+                                      : "cursor-not-allowed text-[#4e342e]/28",
+                                  )}
+                                  onClick={() =>
+                                    void handleReviewCancel(review)
+                                  }
+                                >
+                                  요청취소
+                                </button>
+                              </motion.div>
+                            )}
+                          </div>
                         </TableCell>
                       </TableRow>
                     );
@@ -2395,6 +3324,328 @@ export function HomeDashboard({ username }: { username?: string }) {
                 disabled={hidePlaceSubmitting}
               >
                 {hidePlaceSubmitting ? "처리 중..." : "확인"}
+              </Button>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+
+      {reviewEditConfirmOpen && reviewEditConfirmItem && (
+        <motion.div
+          className="fixed inset-0 z-70 flex items-center justify-center bg-[rgba(30,24,20,0.34)] p-4 backdrop-blur-[2px] lg:p-8"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.2 }}
+          onClick={closeReviewEditConfirm}
+        >
+          <motion.div
+            className={cn(
+              cardClassName,
+              "relative w-full max-w-[560px] p-5 sm:p-6",
+            )}
+            initial={{ opacity: 0, scale: 0.98, y: 8 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            transition={{ duration: 0.28, ease: [0.25, 0.46, 0.45, 0.94] }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <button
+              type="button"
+              aria-label="닫기"
+              onClick={closeReviewEditConfirm}
+              disabled={reviewActionSubmittingId != null}
+              className="absolute right-4 top-4 flex h-10 w-10 items-center justify-center rounded-full text-[#4e342e]/80 transition-colors hover:bg-[#4e342e]/8 disabled:opacity-40"
+            >
+              <X className="h-5 w-5" />
+            </button>
+
+            <div className="pr-10">
+              <h2 className="text-2xl font-bold tracking-tight text-[#4e342e]">
+                수정요청 확인
+              </h2>
+              <p className="flex items-center justify-center mt-3 text-[15px] leading-7 text-[#4e342e]/72">
+                수정을 진행 하시겠습니까?
+              </p>
+            </div>
+
+            <div className="mt-7 flex justify-end gap-3">
+              <Button
+                type="button"
+                variant="outline"
+                className="h-11 rounded-full border-[#4e342e]/16 bg-white/80 px-5 text-sm font-semibold text-[#4e342e] hover:bg-[#4e342e]/6"
+                onClick={closeReviewEditConfirm}
+                disabled={reviewActionSubmittingId != null}
+              >
+                취소
+              </Button>
+              <Button
+                type="button"
+                variant="popcorn"
+                className="h-11 px-5 text-sm font-bold"
+                onClick={() => void handleConfirmReviewEdit()}
+                disabled={reviewActionSubmittingId != null}
+              >
+                {reviewActionSubmittingId != null ? "처리 중..." : "확인"}
+              </Button>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+
+      {reviewEditManageOpen && reviewEditManageItem && (
+        <motion.div
+          className="fixed inset-0 z-80 flex items-center justify-center bg-[rgba(30,24,20,0.34)] p-4 backdrop-blur-[2px] lg:p-8"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.2 }}
+          onClick={closeReviewEditManage}
+        >
+          <motion.div
+            className={cn(
+              cardClassName,
+              "relative flex max-h-[calc(100vh-2rem)] w-full max-w-[1180px] flex-col overflow-hidden p-5 sm:max-h-[calc(100vh-3rem)] sm:p-6 lg:p-7",
+            )}
+            initial={{ opacity: 0, scale: 0.98, y: 8 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            transition={{ duration: 0.28, ease: [0.25, 0.46, 0.45, 0.94] }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <button
+              type="button"
+              aria-label="닫기"
+              onClick={closeReviewEditManage}
+              disabled={
+                reviewEditScriptSaving ||
+                reviewEditImagesUploading ||
+                reviewEditImageDeletingId != null
+              }
+              className="absolute right-4 top-4 flex h-10 w-10 items-center justify-center rounded-full text-[#4e342e]/80 transition-colors hover:bg-[#4e342e]/8 disabled:opacity-40"
+            >
+              <X className="h-5 w-5" />
+            </button>
+
+            <div className="pr-10">
+              <h2 className="text-2xl font-bold tracking-tight text-[#4e342e]">
+                원고/이미지 관리
+              </h2>
+              <p className="mt-2 text-sm text-[#4e342e]/62">
+                영수증 #{reviewEditManageItem.receipt_id ?? "-"} / 원고 #
+                {reviewEditManageItem.script_id ?? "-"}
+              </p>
+            </div>
+
+            <div className="mt-5 flex gap-2">
+              <button
+                type="button"
+                className={cn(
+                  "rounded-full px-4 py-2 text-sm font-semibold transition",
+                  reviewEditManageTab === "script"
+                    ? "bg-[#ffa000] text-white shadow-[0_10px_24px_rgba(255,160,0,0.24)]"
+                    : "bg-white/75 text-[#4e342e] ring-1 ring-[#4e342e]/10 hover:bg-[#fff5de]",
+                )}
+                onClick={() => setReviewEditManageTab("script")}
+              >
+                원고 수정
+              </button>
+              <button
+                type="button"
+                className={cn(
+                  "rounded-full px-4 py-2 text-sm font-semibold transition",
+                  reviewEditManageTab === "images"
+                    ? "bg-[#ffa000] text-white shadow-[0_10px_24px_rgba(255,160,0,0.24)]"
+                    : "bg-white/75 text-[#4e342e] ring-1 ring-[#4e342e]/10 hover:bg-[#fff5de]",
+                )}
+                onClick={() => setReviewEditManageTab("images")}
+              >
+                이미지 관리
+              </button>
+            </div>
+
+            {reviewEditManageTab === "script" ? (
+              <div className="mt-5 flex min-h-0 flex-1 flex-col rounded-[24px] border border-[#4e342e]/10 bg-white/78 p-4 sm:p-5">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-sm text-[#4e342e]/62">
+                    원고 #{reviewEditManageItem.script_id ?? "-"}
+                  </div>
+                  <Button
+                    type="button"
+                    variant="popcorn"
+                    className="h-10 px-4 text-sm font-bold"
+                    onClick={() => void handleSaveReviewEditScript()}
+                    disabled={reviewEditScriptLoading || reviewEditScriptSaving}
+                  >
+                    {reviewEditScriptSaving ? "저장 중..." : "수정 저장"}
+                  </Button>
+                </div>
+
+                <div className="mt-4 min-h-0 flex-1">
+                  <textarea
+                    value={reviewEditScriptContent}
+                    onChange={(event) =>
+                      setReviewEditScriptContent(event.target.value)
+                    }
+                    className="h-full min-h-[360px] w-full resize-none rounded-[22px] border border-[#4e342e]/12 bg-white/88 px-5 py-4 text-[15px] leading-7 text-[#4e342e] shadow-sm outline-none transition focus:border-[#ffa000]/60 focus:ring-2 focus:ring-[#ffa000]/20"
+                    placeholder={
+                      reviewEditScriptLoading
+                        ? "원고 내용을 불러오는 중입니다."
+                        : "원고 내용을 입력해 주세요."
+                    }
+                    disabled={reviewEditScriptLoading || reviewEditScriptSaving}
+                  />
+                </div>
+              </div>
+            ) : (
+              <div className="mt-5 flex min-h-0 flex-1 flex-col rounded-[24px] border border-[#4e342e]/10 bg-white/78 p-4 sm:p-5">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                  <div className="text-sm text-[#4e342e]/62">
+                    영수증 #{reviewEditManageItem.receipt_id ?? "-"} / 원고 #
+                    {reviewEditManageItem.script_id ?? "-"}
+                  </div>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <label className="flex items-center gap-2 rounded-full border border-[#4e342e]/10 bg-white px-3 py-2 text-sm text-[#4e342e]/78">
+                      <input
+                        type="checkbox"
+                        checked={reviewEditSameExif}
+                        onChange={(event) =>
+                          setReviewEditSameExif(event.target.checked)
+                        }
+                        className="h-4 w-4 rounded border-[#4e342e]/20 text-[#ffa000] focus:ring-[#ffa000]/30"
+                      />
+                      이미지 2개 이상 업로드시 체크하세요
+                    </label>
+                    <input
+                      ref={reviewEditImagesInputRef}
+                      type="file"
+                      accept=".jpg,.jpeg,.png,image/jpeg,image/png"
+                      multiple
+                      className="hidden"
+                      onChange={(event) => {
+                        const files = Array.from(event.target.files ?? []);
+                        void uploadReviewEditImages(files);
+                      }}
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="h-10 rounded-full border-[#4e342e]/16 bg-white/80 px-4 text-sm font-semibold text-[#4e342e] hover:bg-[#fff7e2]"
+                      onClick={() => reviewEditImagesInputRef.current?.click()}
+                      disabled={reviewEditImagesUploading}
+                    >
+                      파일 선택
+                    </Button>
+                  </div>
+                </div>
+
+                <div
+                  className={cn(
+                    "mt-4 min-h-[360px] flex-1 rounded-[22px] border border-dashed p-4 transition",
+                    reviewEditImagesDragActive
+                      ? "border-[#ffa000] bg-[#fff4db]"
+                      : "border-[#e2d5c5] bg-[#fffdf9]",
+                  )}
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                    setReviewEditImagesDragActive(true);
+                  }}
+                  onDragLeave={(event) => {
+                    event.preventDefault();
+                    setReviewEditImagesDragActive(false);
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    setReviewEditImagesDragActive(false);
+                    const files = Array.from(event.dataTransfer.files ?? []);
+                    void uploadReviewEditImages(files);
+                  }}
+                >
+                  <div className="mb-4 rounded-[18px] border border-[#4e342e]/8 bg-white/70 px-4 py-3 text-sm leading-6 text-[#4e342e]/62">
+                    이미지를 이 영역에 드래그&드롭하면 바로 업로드됩니다. JPG,
+                    JPEG, PNG 파일만 업로드할 수 있습니다.
+                  </div>
+
+                  {reviewEditImagesLoading ? (
+                    <div className="flex h-full min-h-[240px] items-center justify-center text-sm text-[#4e342e]/55">
+                      이미지 목록을 불러오는 중입니다.
+                    </div>
+                  ) : reviewEditImages.length === 0 ? (
+                    <div className="flex h-full min-h-[240px] items-center justify-center text-sm text-[#4e342e]/55">
+                      등록된 이미지가 없습니다.
+                    </div>
+                  ) : (
+                    <div>
+                      <div className="mb-3 text-sm font-semibold text-[#4e342e]/72">
+                        등록된 이미지
+                      </div>
+                      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
+                        {reviewEditImages.map((image) => (
+                          <div
+                            key={image.id}
+                            className="overflow-hidden rounded-[20px] border border-[#4e342e]/10 bg-white shadow-sm"
+                          >
+                            {image.url ? (
+                              <a
+                                href={image.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="block aspect-square overflow-hidden bg-[#f7efe1]"
+                              >
+                                <Image
+                                  src={`${image.url}${image.url.includes("?") ? "&" : "?"}v=${reviewEditImagesVersion}`}
+                                  alt={`review-image-${image.id}`}
+                                  width={320}
+                                  height={320}
+                                  unoptimized
+                                  className="h-full w-full object-cover transition hover:scale-[1.03]"
+                                  draggable={false}
+                                />
+                              </a>
+                            ) : (
+                              <div className="flex aspect-square items-center justify-center bg-[#f7efe1] text-sm text-[#4e342e]/45">
+                                미리보기 없음
+                              </div>
+                            )}
+                            <div className="space-y-2 px-3 py-3">
+                              <div className="text-xs font-semibold text-[#4e342e]/80">
+                                이미지 #{image.id}
+                              </div>
+
+                              <Button
+                                type="button"
+                                variant="outline"
+                                className="h-9 w-full rounded-full border-rose-200 bg-white text-xs font-semibold text-rose-600 hover:bg-rose-50"
+                                onClick={() =>
+                                  void handleDeleteReviewImage(image.id)
+                                }
+                                disabled={
+                                  reviewEditImageDeletingId === image.id
+                                }
+                              >
+                                {reviewEditImageDeletingId === image.id
+                                  ? "삭제 중..."
+                                  : "삭제"}
+                              </Button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            <div className="mt-6 flex justify-end gap-3">
+              <Button
+                type="button"
+                variant="outline"
+                className="h-11 rounded-full border-[#4e342e]/16 bg-white/80 px-5 text-sm font-semibold text-[#4e342e] hover:bg-[#4e342e]/6"
+                onClick={closeReviewEditManage}
+                disabled={
+                  reviewEditScriptSaving ||
+                  reviewEditImagesUploading ||
+                  reviewEditImageDeletingId != null
+                }
+              >
+                닫기
               </Button>
             </div>
           </motion.div>

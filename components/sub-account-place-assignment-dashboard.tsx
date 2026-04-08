@@ -17,6 +17,8 @@ type ChildAccount = {
   assignedCount: number;
 };
 
+type ManagerRole = "admin" | "parent" | "child" | "unknown";
+
 type PlaceMeta = {
   alias: string;
   placename: string;
@@ -54,6 +56,27 @@ function normalizeChildren(data: unknown): ChildAccount[] {
         assignedCount: Number(item.assigned_count ?? item.assignedCount ?? 0) || 0,
       } satisfies ChildAccount;
     })
+    .filter((item) => item.id > 0 && item.username);
+}
+
+function normalizeParentUsers(data: unknown): ChildAccount[] {
+  if (!Array.isArray(data)) return [];
+
+  return data
+    .filter(isRecord)
+    .map((item) => ({
+      id: Number(item.id) || 0,
+      username:
+        typeof item.username === "string" && item.username.trim()
+          ? item.username.trim()
+          : "",
+      nickname: null,
+      status:
+        typeof item.status === "string" && item.status.trim()
+          ? item.status.trim().toLowerCase()
+          : "active",
+      assignedCount: Number(item.assigned_count ?? item.assignedCount ?? 0) || 0,
+    }))
     .filter((item) => item.id > 0 && item.username);
 }
 
@@ -116,6 +139,7 @@ const shellCardClassName =
   "rounded-[30px] border border-white/70 bg-[#fcf8e9]/94 shadow-[0_22px_60px_rgba(78,52,46,0.12)] backdrop-blur-xl";
 
 export function SubAccountPlaceAssignmentDashboard() {
+  const [managerRole, setManagerRole] = useState<ManagerRole>("unknown");
   const [children, setChildren] = useState<ChildAccount[]>([]);
   const [allowedPlaces, setAllowedPlaces] = useState<PlaceMeta[]>([]);
   const [selectedChild, setSelectedChild] = useState<ChildAccount | null>(null);
@@ -131,25 +155,121 @@ export function SubAccountPlaceAssignmentDashboard() {
   useEffect(() => {
     let cancelled = false;
 
+    const loadRole = async () => {
+      try {
+        const res = await fetch("/api/account/me", { cache: "no-store" });
+        const data = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        const role =
+          typeof data.role === "string" && data.role.trim()
+            ? data.role.trim().toLowerCase()
+            : "parent";
+        setManagerRole(
+          role === "admin" || role === "parent" || role === "child"
+            ? role
+            : "parent",
+        );
+      } catch {
+        if (!cancelled) setManagerRole("parent");
+      }
+    };
+
+    void loadRole();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (managerRole === "unknown") return;
+    let cancelled = false;
+
     const loadInitialData = async () => {
       setChildrenLoading(true);
       setPlacesLoading(true);
 
       try {
-        const [childrenRes, placesRes] = await Promise.all([
-          fetch("/api/parent/my-children", { cache: "no-store" }),
-          fetch("/api/parent/allowed-places", { cache: "no-store" }),
-        ]);
+        const requests =
+          managerRole === "admin"
+            ? [
+                fetch("/api/parent-users", { cache: "no-store" }),
+                fetch("/api/all-places", { cache: "no-store" }),
+                fetch("/api/user-list", { cache: "no-store" }),
+                fetch("/api/api-keys", { cache: "no-store" }),
+              ]
+            : [
+                fetch("/api/parent/my-children", { cache: "no-store" }),
+                fetch("/api/parent/allowed-places", { cache: "no-store" }),
+              ];
 
-        const [childrenData, placesData] = await Promise.all([
-          childrenRes.json().catch(() => []),
-          placesRes.json().catch(() => ({ aliases: [], meta: [] })),
-        ]);
+        const responses = await Promise.all(requests);
 
         if (cancelled) return;
+        if (managerRole === "admin") {
+          const [parentsRes, placesRes, usersRes, apiKeysRes] = responses;
+          const [parentsData, placesData, usersData, apiKeysData] =
+            await Promise.all([
+              parentsRes.json().catch(() => []),
+              placesRes.json().catch(() => []),
+              usersRes.json().catch(() => []),
+              apiKeysRes.json().catch(() => []),
+            ]);
 
-        setChildren(childrenRes.ok ? normalizeChildren(childrenData) : []);
-        setAllowedPlaces(placesRes.ok ? normalizePlaces(placesData) : []);
+          const parentStatusMap = new Map(
+            (Array.isArray(usersData) ? usersData : [])
+              .filter(isRecord)
+              .map((item) => [
+                typeof item.username === "string" ? item.username.trim() : "",
+                typeof item.status === "string" ? item.status.trim().toLowerCase() : "active",
+              ]),
+          );
+          const assignedCountMap = new Map(
+            (Array.isArray(apiKeysData) ? apiKeysData : [])
+              .filter(isRecord)
+              .map((item) => [
+                typeof item.username === "string" ? item.username.trim() : "",
+                Array.isArray(item.assigned_places) ? item.assigned_places.length : 0,
+              ]),
+          );
+
+          const parents = normalizeParentUsers(parentsData).map((item) => ({
+            ...item,
+            status: parentStatusMap.get(item.username) ?? item.status,
+            assignedCount: assignedCountMap.get(item.username) ?? item.assignedCount,
+          }));
+
+          setChildren(parentsRes.ok ? parents : []);
+          setAllowedPlaces(
+            placesRes.ok
+              ? (Array.isArray(placesData)
+                  ? placesData
+                  : []
+                ).filter(isRecord).map((item) => ({
+                  alias:
+                    typeof item.alias === "string" && item.alias.trim()
+                      ? item.alias.trim()
+                      : "",
+                  placename:
+                    typeof item.placename === "string" && item.placename.trim()
+                      ? item.placename.trim()
+                      : typeof item.alias === "string"
+                        ? item.alias.trim()
+                        : "이름 없음",
+                  mid: null,
+                  amount: null,
+                })).filter((item) => item.alias)
+              : [],
+          );
+        } else {
+          const [childrenRes, placesRes] = responses;
+          const [childrenData, placesData] = await Promise.all([
+            childrenRes.json().catch(() => []),
+            placesRes.json().catch(() => ({ aliases: [], meta: [] })),
+          ]);
+
+          setChildren(childrenRes.ok ? normalizeChildren(childrenData) : []);
+          setAllowedPlaces(placesRes.ok ? normalizePlaces(placesData) : []);
+        }
       } catch {
         if (cancelled) return;
         setChildren([]);
@@ -168,7 +288,7 @@ export function SubAccountPlaceAssignmentDashboard() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [managerRole]);
 
   const filteredChildren = useMemo(() => {
     const keyword = leftSearch.trim().toLowerCase();
@@ -206,12 +326,22 @@ export function SubAccountPlaceAssignmentDashboard() {
     setPlaceSearch("");
 
     try {
-      const res = await fetch(
-        `/api/parent/child-assigned-places?username=${encodeURIComponent(child.username)}`,
-        { cache: "no-store" },
-      );
+      const url =
+        managerRole === "admin"
+          ? `/api/assigned-places?username=${encodeURIComponent(child.username)}`
+          : `/api/parent/child-assigned-places?username=${encodeURIComponent(child.username)}`;
+      const res = await fetch(url, { cache: "no-store" });
       const data = await res.json().catch(() => ({ aliases: [] }));
-      const aliases = res.ok ? normalizeAssignedAliases(data) : [];
+      const aliases = res.ok
+        ? managerRole === "admin"
+          ? Array.isArray((data as { assigned?: unknown[] }).assigned)
+            ? ((data as { assigned: unknown[] }).assigned
+                .filter((value): value is string => typeof value === "string")
+                .map((value) => value.trim())
+                .filter(Boolean))
+            : []
+          : normalizeAssignedAliases(data)
+        : [];
       const nextSet = new Set(aliases);
       setAssignedAliases(nextSet);
       setDraftAliases(new Set(aliases));
@@ -257,14 +387,26 @@ export function SubAccountPlaceAssignmentDashboard() {
 
     try {
       const aliases = Array.from(draftAliases);
-      const res = await fetch("/api/parent/save-child-assigned-places", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          username: selectedChild.username,
-          aliases,
-        }),
-      });
+      const res = await fetch(
+        managerRole === "admin"
+          ? "/api/assign-places"
+          : "/api/parent/save-child-assigned-places",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(
+            managerRole === "admin"
+              ? {
+                  username: selectedChild.username,
+                  places: aliases,
+                }
+              : {
+                  username: selectedChild.username,
+                  aliases,
+                },
+          ),
+        },
+      );
       const data = await res.json().catch(() => ({}));
 
       if (!res.ok) {
@@ -332,9 +474,14 @@ export function SubAccountPlaceAssignmentDashboard() {
         </motion.div>
       </section>
 
-      <section className="grid gap-5 xl:grid-cols-[500px_minmax(0,1fr)]">
-        <div className={cn(shellCardClassName, "overflow-hidden p-4 sm:p-5")}>
-          <div className="flex flex-col gap-4">
+      <section className="grid gap-5 xl:grid-cols-[500px_minmax(0,1fr)] xl:items-stretch">
+        <div
+          className={cn(
+            shellCardClassName,
+            "overflow-hidden p-4 sm:p-5 xl:flex xl:min-h-[78vh] xl:flex-col",
+          )}
+        >
+          <div className="flex flex-col gap-4 xl:h-full xl:min-h-0">
             <div className="relative">
               <Search
                 size={16}
@@ -343,13 +490,17 @@ export function SubAccountPlaceAssignmentDashboard() {
               <Input
                 value={leftSearch}
                 onChange={(event) => setLeftSearch(event.target.value)}
-                placeholder="하위 계정 검색(+아이디)"
+                placeholder={
+                  managerRole === "admin"
+                    ? "부모 계정 검색(+아이디)"
+                    : "하위 계정 검색(+아이디)"
+                }
                 className="pl-10"
               />
             </div>
 
-            <div className="overflow-x-auto rounded-[24px] border border-[#4e342e]/10 bg-white/78">
-              <div className="min-w-[436px]">
+            <div className="overflow-x-auto rounded-[24px] border border-[#4e342e]/10 bg-white/78 xl:min-h-0 xl:flex-1">
+              <div className="min-w-[436px] xl:flex xl:h-full xl:min-h-0 xl:flex-col">
                 <div className="grid grid-cols-[52px_minmax(0,1.4fr)_92px_112px_88px] border-b border-[#4e342e]/10 bg-[#fff0c8] px-3 py-3 text-center text-[13px] font-bold text-[#4e342e]">
                   <span>#</span>
                   <span>아이디</span>
@@ -358,11 +509,13 @@ export function SubAccountPlaceAssignmentDashboard() {
                   <span>Action</span>
                 </div>
 
-                <div className="max-h-[560px] overflow-y-auto">
+                <div className="max-h-[560px] overflow-y-auto xl:max-h-[64vh] xl:min-h-0 xl:flex-1">
                   {childrenLoading ? (
                     <div className="flex items-center justify-center gap-2 px-4 py-12 text-sm text-[#4e342e]/60">
                       <Loader2 size={16} className="animate-spin" />
-                      하위 계정을 불러오는 중입니다.
+                      {managerRole === "admin"
+                        ? "부모 계정을 불러오는 중입니다."
+                        : "하위 계정을 불러오는 중입니다."}
                     </div>
                   ) : filteredChildren.length === 0 ? (
                     <div className="px-4 py-12 text-center text-sm text-[#4e342e]/55">
@@ -428,22 +581,30 @@ export function SubAccountPlaceAssignmentDashboard() {
           </div>
         </div>
 
-        <div className={cn(shellCardClassName, "p-4 sm:p-5 lg:p-6")}>
+        <div
+          className={cn(
+            shellCardClassName,
+            "p-4 sm:p-5 lg:p-6 xl:flex xl:min-h-[78vh] xl:flex-col",
+          )}
+        >
           {!selectedChild ? (
-            <div className="flex min-h-[520px] flex-col items-center justify-center rounded-[26px] border border-dashed border-[#4e342e]/15 bg-white/42 px-6 text-center">
+            <div className="flex min-h-[520px] flex-col items-center justify-center rounded-[26px] border border-dashed border-[#4e342e]/15 bg-white/42 px-6 text-center xl:h-full xl:min-h-0">
               <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-[#fff3d6] text-[#ffa000] shadow-sm">
                 <MapPinned size={28} />
               </div>
               <h2 className="mt-5 text-xl font-semibold text-[#4e342e]">
-                하위 계정을 선택해 주세요
+                {managerRole === "admin"
+                  ? "부모 계정을 선택해 주세요"
+                  : "하위 계정을 선택해 주세요"}
               </h2>
               <p className="mt-2 break-keep text-sm leading-6 text-[#4e342e]/58">
-                왼쪽 목록에서 `변경` 버튼을 누르면 해당 계정의 플레이스 배정 목록을
-                확인하고 수정할 수 있습니다.
+                {managerRole === "admin"
+                  ? "왼쪽 목록에서 `변경` 버튼을 누르면 해당 부모 계정의 플레이스 배정 목록을 확인하고 수정할 수 있습니다."
+                  : "왼쪽 목록에서 `변경` 버튼을 누르면 해당 계정의 플레이스 배정 목록을 확인하고 수정할 수 있습니다."}
               </p>
             </div>
           ) : (
-            <div className="flex flex-col gap-4">
+            <div className="flex min-h-[640px] flex-col gap-4 xl:h-full xl:min-h-0">
               <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                 <div className="min-w-0">
                   <h2 className="truncate text-[28px] font-bold tracking-tight text-[#4e342e] sm:text-[32px]">
@@ -451,8 +612,9 @@ export function SubAccountPlaceAssignmentDashboard() {
                       " - 플레이스 배정"}
                   </h2>
                   <div className="mt-3 rounded-2xl border border-[#7ac7d8]/24 bg-[#dff5fb] px-4 py-3 text-sm leading-6 text-[#4e342e]/72">
-                    이 하위 계정은 부모 계정에 배정된 플레이스 중에서만 선택할 수
-                    있습니다.
+                    {managerRole === "admin"
+                      ? "어드민은 선택한 부모 계정에 플레이스를 직접 배정할 수 있습니다."
+                      : "이 하위 계정은 부모 계정에 배정된 플레이스 중에서만 선택할 수 있습니다."}
                   </div>
                 </div>
 
@@ -481,73 +643,75 @@ export function SubAccountPlaceAssignmentDashboard() {
                 />
               </div>
 
-              <div className="min-h-[420px]">
+              <div className="min-h-0 flex-1">
                 {selectionLoading || placesLoading ? (
-                  <div className="flex min-h-[420px] items-center justify-center gap-2 rounded-[26px] border border-[#4e342e]/10 bg-white/42 text-sm text-[#4e342e]/60">
+                  <div className="flex h-full min-h-[420px] items-center justify-center gap-2 rounded-[26px] border border-[#4e342e]/10 bg-white/42 text-sm text-[#4e342e]/60">
                     <Loader2 size={16} className="animate-spin" />
                     플레이스 정보를 불러오는 중입니다.
                   </div>
                 ) : filteredPlaces.length === 0 ? (
-                  <div className="flex min-h-[420px] items-center justify-center rounded-[26px] border border-dashed border-[#4e342e]/15 bg-white/42 px-6 text-center text-sm text-[#4e342e]/55">
+                  <div className="flex h-full min-h-[420px] items-center justify-center rounded-[26px] border border-dashed border-[#4e342e]/15 bg-white/42 px-6 text-center text-sm text-[#4e342e]/55">
                     검색 조건에 맞는 플레이스가 없습니다.
                   </div>
                 ) : (
-                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 2xl:grid-cols-4">
-                    {filteredPlaces.map((place) => {
-                      const isSelected = draftAliases.has(place.alias);
+                  <div className="h-full max-h-[560px] overflow-y-auto rounded-[26px] border border-[#4e342e]/10 bg-white/28 p-1 pr-2 xl:max-h-[64vh]">
+                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 2xl:grid-cols-4">
+                      {filteredPlaces.map((place) => {
+                        const isSelected = draftAliases.has(place.alias);
 
-                      return (
-                        <button
-                          key={place.alias}
-                          type="button"
-                          onClick={() => togglePlace(place.alias)}
-                          className={cn(
-                            "group rounded-[22px] border bg-white/86 px-4 py-4 text-left shadow-sm transition-all",
-                            "hover:-translate-y-0.5 hover:shadow-md",
-                            isSelected
-                              ? "border-[#ffa000]/75 bg-[#fff3d6] shadow-[0_2px_0_rgba(255,160,0,0.18)] ring-2 ring-[#ffa000]/18"
-                              : "border-[#4e342e]/10 hover:border-[#4e342e]/18",
-                          )}
-                          aria-pressed={isSelected}
-                          title={place.placename}
-                        >
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0 flex-1">
-                              <div className="truncate text-[15px] font-semibold text-[#4e342e]">
-                                {place.placename}
-                              </div>
-                              <div
-                                className="mt-2 truncate text-sm text-[#4e342e]/70"
-                                title={`작업량: ${
-                                  place.amount != null
+                        return (
+                          <button
+                            key={place.alias}
+                            type="button"
+                            onClick={() => togglePlace(place.alias)}
+                            className={cn(
+                              "group rounded-[22px] border bg-white/86 px-4 py-4 text-left shadow-sm transition-all",
+                              "hover:-translate-y-0.5 hover:shadow-md",
+                              isSelected
+                                ? "border-[#ffa000]/75 bg-[#fff3d6] shadow-[0_2px_0_rgba(255,160,0,0.18)] ring-2 ring-[#ffa000]/18"
+                                : "border-[#4e342e]/10 hover:border-[#4e342e]/18",
+                            )}
+                            aria-pressed={isSelected}
+                            title={place.placename}
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0 flex-1">
+                                <div className="truncate text-[15px] font-semibold text-[#4e342e]">
+                                  {place.placename}
+                                </div>
+                                <div
+                                  className="mt-2 truncate text-sm text-[#4e342e]/70"
+                                  title={`작업량: ${
+                                    place.amount != null
+                                      ? `${place.amount.toLocaleString("ko-KR")}개`
+                                      : "-"
+                                  }`}
+                                >
+                                  작업량:{" "}
+                                  {place.amount != null
                                     ? `${place.amount.toLocaleString("ko-KR")}개`
-                                    : "-"
-                                }`}
-                              >
-                                작업량:{" "}
-                                {place.amount != null
-                                  ? `${place.amount.toLocaleString("ko-KR")}개`
-                                  : "-"}
+                                    : "-"}
+                                </div>
+                                <div
+                                  className="mt-1 truncate text-sm text-[#4e342e]/58"
+                                  title={place.mid ?? undefined}
+                                >
+                                  MID: {place.mid ?? "-"}
+                                </div>
                               </div>
                               <div
-                                className="mt-1 truncate text-sm text-[#4e342e]/58"
-                                title={place.mid ?? undefined}
-                              >
-                                MID: {place.mid ?? "-"}
-                              </div>
+                                className={cn(
+                                  "mt-0.5 flex h-5 w-5 shrink-0 rounded-full border transition-colors",
+                                  isSelected
+                                    ? "border-[#ffa000] bg-[#ffa000]"
+                                    : "border-[#4e342e]/15 bg-white",
+                                )}
+                              />
                             </div>
-                            <div
-                              className={cn(
-                                "mt-0.5 flex h-5 w-5 shrink-0 rounded-full border transition-colors",
-                                isSelected
-                                  ? "border-[#ffa000] bg-[#ffa000]"
-                                  : "border-[#4e342e]/15 bg-white",
-                              )}
-                            />
-                          </div>
-                        </button>
-                      );
-                    })}
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
                 )}
               </div>

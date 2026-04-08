@@ -66,6 +66,9 @@ export const EXTERNAL_API = {
   managementPlaces:
     process.env.EXTERNAL_MANAGEMENT_PLACES_URL ??
     `${internalBase}/api/management/places`,
+  managementPlaceStats:
+    process.env.EXTERNAL_MANAGEMENT_PLACE_STATS_URL ??
+    `${internalBase}/api/management/place-stats`,
   reviewsByPlace:
     process.env.EXTERNAL_REVIEWS_BY_PLACE_URL ??
     `${internalBase}/api/reviews/by-place`,

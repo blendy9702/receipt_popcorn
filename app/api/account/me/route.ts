@@ -19,7 +19,20 @@ export async function GET() {
 
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
-        return NextResponse.json(data, { status: res.status });
+        const cookieStore = await cookies();
+        const token = cookieStore.get(AUTH_TOKEN_COOKIE)?.value;
+        const payload = token ? await verifyAuthToken(token) : null;
+
+        return NextResponse.json(
+          {
+            ...data,
+            role:
+              typeof (data as { role?: string }).role === "string"
+                ? (data as { role: string }).role
+                : payload?.role ?? null,
+          },
+          { status: res.status },
+        );
       }
     }
 
@@ -43,6 +56,7 @@ export async function GET() {
 
     return NextResponse.json({
       username: payload.username,
+      role: payload.role ?? null,
       user_id: null,
       company_name: null,
       mileage_balance: 0,

@@ -47,7 +47,7 @@ export function FlowingMenuItem({
         className={`flowing-menu-item__link ${isActive ? activeClass : inactiveClass}`}
       >
         <Icon size={18} strokeWidth={2} className="shrink-0" />
-        <span className="truncate">{label}</span>
+        <span className="truncate font-normal">{label}</span>
       </Link>
     </div>
   );

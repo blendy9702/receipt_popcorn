@@ -56,7 +56,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const token = await createAuthToken(username);
+    const loginRole =
+      data?.user?.role === "admin" ||
+      data?.user?.role === "parent" ||
+      data?.user?.role === "child"
+        ? data.user.role
+        : sessionLogin.role;
+    const token = await createAuthToken(username, loginRole);
     const reviewSsoUrl = issuedTicket.launchUrl;
 
     const response = NextResponse.json({ ok: true, reviewSsoUrl });

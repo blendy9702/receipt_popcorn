@@ -57,7 +57,10 @@ export async function GET(request: NextRequest) {
       return redirectWithError(request, sessionLogin.detail);
     }
 
-    const token = await createAuthToken(sessionLogin.username);
+    const token = await createAuthToken(
+      sessionLogin.username,
+      sessionLogin.role,
+    );
     const response = NextResponse.redirect(resolveReturnTo(request));
     response.cookies.set(AUTH_TOKEN_COOKIE, token, {
       path: "/",

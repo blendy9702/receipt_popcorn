@@ -79,6 +79,7 @@ type SessionLoginResult =
   | {
       ok: true;
       username: string;
+      role?: "admin" | "parent" | "child";
       sessionCookie: string;
     }
   | {
@@ -103,6 +104,12 @@ export async function establishReviewSession(
   const data = await upstream.json().catch(() => ({}));
   const username =
     typeof data?.user?.username === "string" ? data.user.username.trim() : "";
+  const role =
+    data?.user?.role === "admin" ||
+    data?.user?.role === "parent" ||
+    data?.user?.role === "child"
+      ? data.user.role
+      : undefined;
   const sessionCookie = upstream.headers.get("set-cookie") || "";
 
   if (!upstream.ok || !username || !sessionCookie) {
@@ -118,6 +125,7 @@ export async function establishReviewSession(
   return {
     ok: true,
     username,
+    ...(role ? { role } : {}),
     sessionCookie,
   };
 }

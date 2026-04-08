@@ -66,6 +66,21 @@ type DisplayRow = {
   hasChildren: boolean;
 };
 
+type ManagerRole = "admin" | "parent" | "child" | "unknown";
+
+type AdminManagedUser = {
+  id: number;
+  username: string;
+  role: string;
+  parent: string;
+  status: string;
+};
+
+type ParentOption = {
+  id: number;
+  username: string;
+};
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -116,8 +131,54 @@ function normalizeTree(data: unknown): DirectAccount[] {
     .filter((item) => item.id > 0 && item.username);
 }
 
+function normalizeAdminUsers(data: unknown): AdminManagedUser[] {
+  if (!Array.isArray(data)) return [];
+
+  return data
+    .filter(isRecord)
+    .map((item) => ({
+      id: Number(item.id) || 0,
+      username:
+        typeof item.username === "string" && item.username.trim()
+          ? item.username.trim()
+          : "",
+      role:
+        typeof item.role === "string" && item.role.trim()
+          ? item.role.trim().toLowerCase()
+          : "child",
+      parent:
+        typeof item.parent === "string" && item.parent.trim()
+          ? item.parent.trim()
+          : "본인",
+      status:
+        typeof item.status === "string" && item.status.trim()
+          ? item.status.trim().toLowerCase()
+          : "inactive",
+    }))
+    .filter((item) => item.id > 0 && item.username);
+}
+
+function normalizeParentOptions(data: unknown): ParentOption[] {
+  if (!Array.isArray(data)) return [];
+
+  return data
+    .filter(isRecord)
+    .map((item) => ({
+      id: Number(item.id) || 0,
+      username:
+        typeof item.username === "string" && item.username.trim()
+          ? item.username.trim()
+          : "",
+    }))
+    .filter((item) => item.id > 0 && item.username);
+}
+
 function getStatusLabel(status: string) {
   return status === "active" ? "활성" : "비활성";
+}
+
+function getRoleLabel(role: string) {
+  return role === "parent" ? "parent" : "child";
 }
 
 function getStatusClassName(status: string) {
@@ -131,10 +192,14 @@ const shellCardClassName =
   "rounded-[30px] border border-white/70 bg-[#fcf8e9]/94 shadow-[0_22px_60px_rgba(78,52,46,0.12)] backdrop-blur-xl";
 
 export function AccountManagementDashboard() {
+  const [managerRole, setManagerRole] = useState<ManagerRole>("unknown");
   const [tree, setTree] = useState<DirectAccount[]>([]);
+  const [adminUsers, setAdminUsers] = useState<AdminManagedUser[]>([]);
+  const [parentOptions, setParentOptions] = useState<ParentOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [createUsername, setCreateUsername] = useState("");
   const [createPassword, setCreatePassword] = useState("");
+  const [createParent, setCreateParent] = useState("self");
   const [lookupKeyword, setLookupKeyword] = useState("");
   const [selectedAccountId, setSelectedAccountId] = useState("");
   const [generatedLink, setGeneratedLink] = useState("");
@@ -146,35 +211,104 @@ export function AccountManagementDashboard() {
   const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
 
   const loadTree = useCallback(async () => {
+    if (managerRole === "unknown") return;
     setLoading(true);
     try {
-      const res = await fetch("/api/parent/my-children-tree", { cache: "no-store" });
-      const data = await res.json().catch(() => []);
+      if (managerRole === "admin") {
+        const [usersRes, parentsRes] = await Promise.all([
+          fetch("/api/user-list", { cache: "no-store" }),
+          fetch("/api/parent-users", { cache: "no-store" }),
+        ]);
+        const [usersData, parentsData] = await Promise.all([
+          usersRes.json().catch(() => []),
+          parentsRes.json().catch(() => []),
+        ]);
 
-      if (!res.ok) {
-        throw new Error(
-          typeof data.detail === "string"
-            ? data.detail
-            : "계정 목록을 불러오지 못했습니다.",
-        );
+        if (!usersRes.ok) {
+          throw new Error(
+            typeof usersData.detail === "string"
+              ? usersData.detail
+              : "계정 목록을 불러오지 못했습니다.",
+          );
+        }
+
+        setAdminUsers(normalizeAdminUsers(usersData));
+        setParentOptions(normalizeParentOptions(parentsData));
+        setTree([]);
+      } else {
+        const res = await fetch("/api/parent/my-children-tree", {
+          cache: "no-store",
+        });
+        const data = await res.json().catch(() => []);
+
+        if (!res.ok) {
+          throw new Error(
+            typeof data.detail === "string"
+              ? data.detail
+              : "계정 목록을 불러오지 못했습니다.",
+          );
+        }
+
+        setTree(normalizeTree(data));
+        setAdminUsers([]);
+        setParentOptions([]);
       }
-
-      setTree(normalizeTree(data));
     } catch (error) {
       setTree([]);
+      setAdminUsers([]);
+      setParentOptions([]);
       toast.error(
         error instanceof Error ? error.message : "계정 목록을 불러오지 못했습니다.",
       );
     } finally {
       setLoading(false);
     }
+  }, [managerRole]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadRole = async () => {
+      try {
+        const res = await fetch("/api/account/me", { cache: "no-store" });
+        const data = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        const role =
+          typeof data.role === "string" && data.role.trim()
+            ? data.role.trim().toLowerCase()
+            : "parent";
+        setManagerRole(
+          role === "admin" || role === "parent" || role === "child"
+            ? role
+            : "parent",
+        );
+      } catch {
+        if (!cancelled) setManagerRole("parent");
+      }
+    };
+
+    void loadRole();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
+    if (managerRole === "unknown") return;
     void loadTree();
-  }, [loadTree]);
+  }, [loadTree, managerRole]);
 
   const allSelectableAccounts = useMemo(() => {
+    if (managerRole === "admin") {
+      return adminUsers.map<SelectableAccount>((account) => ({
+        id: account.id,
+        username: account.username,
+        status: account.status,
+        depth: 0,
+        isDirect: true,
+      }));
+    }
+
     return tree.flatMap<SelectableAccount>((direct) => [
       {
         id: direct.id,
@@ -191,7 +325,7 @@ export function AccountManagementDashboard() {
         isDirect: false,
       })),
     ]);
-  }, [tree]);
+  }, [adminUsers, managerRole, tree]);
 
   const filteredSelectableAccounts = useMemo(() => {
     const keyword = lookupKeyword.trim().toLowerCase();
@@ -224,6 +358,8 @@ export function AccountManagementDashboard() {
   }, [selectedAccountId]);
 
   const displayRows = useMemo(() => {
+    if (managerRole === "admin") return [];
+
     return tree.flatMap<DisplayRow>((direct) => {
       const rows: DisplayRow[] = [
         {
@@ -251,7 +387,7 @@ export function AccountManagementDashboard() {
 
       return rows;
     });
-  }, [expandedIds, tree]);
+  }, [expandedIds, managerRole, tree]);
 
   const handleCreateAccount = async () => {
     const username = createUsername.trim();
@@ -264,11 +400,19 @@ export function AccountManagementDashboard() {
 
     setCreating(true);
     try {
-      const res = await fetch("/api/parent/create-child", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, password }),
-      });
+      const isAdmin = managerRole === "admin";
+      const res = await fetch(
+        isAdmin ? "/api/create-user" : "/api/parent/create-child",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(
+            isAdmin
+              ? { username, password, parent: createParent }
+              : { username, password },
+          ),
+        },
+      );
       const data = await res.json().catch(() => ({}));
 
       if (!res.ok) {
@@ -281,6 +425,9 @@ export function AccountManagementDashboard() {
 
       setCreateUsername("");
       setCreatePassword("");
+      if (isAdmin) {
+        setCreateParent("self");
+      }
       await loadTree();
       toast.success("계정을 생성했습니다.");
     } catch (error) {
@@ -364,15 +511,24 @@ export function AccountManagementDashboard() {
   };
 
   const handleToggleStatus = async (row: DisplayRow) => {
-    if (!row.isDirect) return;
+    if (managerRole !== "admin" && !row.isDirect) return;
 
     setTogglingId(row.id);
     try {
-      const res = await fetch("/api/parent/toggle-child-status", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id: row.id }),
-      });
+      const res = await fetch(
+        managerRole === "admin"
+          ? "/api/toggle-user-status"
+          : "/api/parent/toggle-child-status",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(
+            managerRole === "admin"
+              ? { username: row.username }
+              : { user_id: row.id },
+          ),
+        },
+      );
       const data = await res.json().catch(() => ({}));
 
       if (!res.ok) {
@@ -383,21 +539,39 @@ export function AccountManagementDashboard() {
         );
       }
 
-      setTree((current) =>
-        current.map((account) =>
-          account.id === row.id
-            ? {
-                ...account,
-                status:
-                  typeof data.new_status === "string" && data.new_status.trim()
-                    ? data.new_status.trim().toLowerCase()
-                    : account.status === "active"
-                      ? "inactive"
-                      : "active",
-              }
-            : account,
-        ),
-      );
+      if (managerRole === "admin") {
+        setAdminUsers((current) =>
+          current.map((account) =>
+            account.id === row.id
+              ? {
+                  ...account,
+                  status:
+                    typeof data.new_status === "string" && data.new_status.trim()
+                      ? data.new_status.trim().toLowerCase()
+                      : account.status === "active"
+                        ? "inactive"
+                        : "active",
+                }
+              : account,
+          ),
+        );
+      } else {
+        setTree((current) =>
+          current.map((account) =>
+            account.id === row.id
+              ? {
+                  ...account,
+                  status:
+                    typeof data.new_status === "string" && data.new_status.trim()
+                      ? data.new_status.trim().toLowerCase()
+                      : account.status === "active"
+                        ? "inactive"
+                        : "active",
+                }
+              : account,
+          ),
+        );
+      }
       toast.success("상태를 변경했습니다.");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "상태 변경에 실패했습니다.");
@@ -407,16 +581,23 @@ export function AccountManagementDashboard() {
   };
 
   const handleDelete = async (row: DisplayRow) => {
-    if (!row.isDirect) return;
+    if (managerRole !== "admin" && !row.isDirect) return;
     if (!window.confirm(`"${row.username}" 계정을 삭제하시겠습니까?`)) return;
 
     setDeletingId(row.id);
     try {
-      const res = await fetch("/api/parent/delete-child", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id: row.id }),
-      });
+      const res = await fetch(
+        managerRole === "admin" ? "/api/delete-user" : "/api/parent/delete-child",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(
+            managerRole === "admin"
+              ? { username: row.username }
+              : { user_id: row.id },
+          ),
+        },
+      );
       const data = await res.json().catch(() => ({}));
 
       if (!res.ok) {
@@ -488,9 +669,27 @@ export function AccountManagementDashboard() {
             <div>
               <h2 className="text-xl font-semibold text-[#4e342e]">계정 생성</h2>
               <p className="mt-1 text-sm text-[#4e342e]/60">
-                직속 하위 계정을 새로 만들 수 있습니다.
+                {managerRole === "admin"
+                  ? "부모 계정 또는 하위 계정을 새로 만들 수 있습니다."
+                  : "직속 하위 계정을 새로 만들 수 있습니다."}
               </p>
             </div>
+
+            {managerRole === "admin" && (
+              <Select value={createParent} onValueChange={setCreateParent}>
+                <SelectTrigger>
+                  <SelectValue placeholder="상위 계정 선택" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="self">본인(parent 생성)</SelectItem>
+                  {parentOptions.map((option) => (
+                    <SelectItem key={option.id} value={String(option.id)}>
+                      {option.username}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
 
             <Input
               value={createUsername}
@@ -621,116 +820,227 @@ export function AccountManagementDashboard() {
           <div>
             <h2 className="text-xl font-semibold text-[#4e342e]">계정 목록</h2>
             <p className="mt-1 text-sm text-[#4e342e]/60">
-              직속 계정을 클릭하면 하위 계정을 펼쳐서 볼 수 있습니다.
+              {managerRole === "admin"
+                ? "관리자를 제외한 계정을 한 번에 관리할 수 있습니다."
+                : "직속 계정을 클릭하면 하위 계정을 펼쳐서 볼 수 있습니다."}
             </p>
           </div>
 
           <div className="overflow-hidden rounded-[24px] border border-[#4e342e]/10 bg-white/78">
-            <Table className="border-collapse">
-              <TableHeader>
-                <TableRow className="border-b border-[#4e342e]/10 bg-[#fff0c8] hover:bg-[#fff0c8]">
-                  <TableHead className="h-11 w-16 bg-[#fff0c8] px-3 py-3 text-center text-[14px] font-semibold text-[#4e342e]">
-                    #
-                  </TableHead>
-                  <TableHead className="h-11 bg-[#fff0c8] px-3 py-3 text-left text-[14px] font-semibold text-[#4e342e]">
-                    아이디
-                  </TableHead>
-                  <TableHead className="h-11 w-28 bg-[#fff0c8] px-3 py-3 text-center text-[14px] font-semibold text-[#4e342e]">
-                    상태
-                  </TableHead>
-                  <TableHead className="h-11 w-28 bg-[#fff0c8] px-3 py-3 text-center text-[14px] font-semibold text-[#4e342e]">
-                    토글
-                  </TableHead>
-                  <TableHead className="h-11 w-20 bg-[#fff0c8] px-3 py-3 text-center text-[14px] font-semibold text-[#4e342e]">
-                    삭제
-                  </TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {displayRows.map((row, index) => {
-                  const isExpanded = expandedIds.has(row.id);
-                  const isBusy = togglingId === row.id || deletingId === row.id;
+            {managerRole === "admin" ? (
+              <Table className="border-collapse">
+                <TableHeader>
+                  <TableRow className="border-b border-[#4e342e]/10 bg-[#fff0c8] hover:bg-[#fff0c8]">
+                    <TableHead className="h-11 w-16 bg-[#fff0c8] px-3 py-3 text-center text-[14px] font-semibold text-[#4e342e]">
+                      #
+                    </TableHead>
+                    <TableHead className="h-11 bg-[#fff0c8] px-3 py-3 text-left text-[14px] font-semibold text-[#4e342e]">
+                      아이디
+                    </TableHead>
+                    <TableHead className="h-11 w-28 bg-[#fff0c8] px-3 py-3 text-center text-[14px] font-semibold text-[#4e342e]">
+                      권한
+                    </TableHead>
+                    <TableHead className="h-11 w-32 bg-[#fff0c8] px-3 py-3 text-center text-[14px] font-semibold text-[#4e342e]">
+                      상위계정
+                    </TableHead>
+                    <TableHead className="h-11 w-28 bg-[#fff0c8] px-3 py-3 text-center text-[14px] font-semibold text-[#4e342e]">
+                      상태
+                    </TableHead>
+                    <TableHead className="h-11 w-28 bg-[#fff0c8] px-3 py-3 text-center text-[14px] font-semibold text-[#4e342e]">
+                      토글
+                    </TableHead>
+                    <TableHead className="h-11 w-20 bg-[#fff0c8] px-3 py-3 text-center text-[14px] font-semibold text-[#4e342e]">
+                      삭제
+                    </TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {adminUsers.map((row, index) => {
+                    const isBusy = togglingId === row.id || deletingId === row.id;
 
-                  return (
-                    <TableRow
-                      key={`${row.id}-${row.depth}`}
-                      className={cn(
-                        "border-b border-[#4e342e]/8 hover:bg-[#ffa000]/8",
-                        row.depth > 0 && "bg-[#fffaf0]",
-                      )}
-                    >
-                      <TableCell className="px-3 py-3 text-center text-[14px] text-[#4e342e]/75">
-                        {index + 1}
-                      </TableCell>
-                      <TableCell className="px-3 py-3 text-[14px] text-[#4e342e]">
-                        <button
-                          type="button"
-                          className={cn(
-                            "flex items-center gap-2 text-left",
-                            row.isDirect && row.hasChildren
-                              ? "cursor-pointer"
-                              : "cursor-default",
-                          )}
-                          style={{ paddingLeft: row.depth * 18 }}
-                          onClick={() => toggleExpanded(row)}
-                          disabled={!row.isDirect || !row.hasChildren}
-                        >
-                          {row.isDirect && row.hasChildren ? (
-                            isExpanded ? (
-                              <ChevronDown className="h-4 w-4 shrink-0 text-[#4e342e]/70" />
+                    return (
+                      <TableRow
+                        key={row.id}
+                        className="border-b border-[#4e342e]/8 hover:bg-[#ffa000]/8"
+                      >
+                        <TableCell className="px-3 py-3 text-center text-[14px] text-[#4e342e]/75">
+                          {index + 1}
+                        </TableCell>
+                        <TableCell className="px-3 py-3 text-[14px] font-medium text-[#4e342e]">
+                          {row.username}
+                        </TableCell>
+                        <TableCell className="px-3 py-3 text-center text-[13px] text-[#4e342e]/75">
+                          {getRoleLabel(row.role)}
+                        </TableCell>
+                        <TableCell className="px-3 py-3 text-center text-[13px] text-[#4e342e]/75">
+                          {row.parent}
+                        </TableCell>
+                        <TableCell className="px-3 py-3 text-center">
+                          <span
+                            className={cn(
+                              "inline-flex rounded-full px-2.5 py-1 text-[11px] font-semibold ring-1",
+                              getStatusClassName(row.status),
+                            )}
+                          >
+                            {getStatusLabel(row.status)}
+                          </span>
+                        </TableCell>
+                        <TableCell className="px-3 py-3 text-center">
+                          <div className="inline-flex items-center justify-center">
+                            <Switch
+                              checked={row.status === "active"}
+                              onCheckedChange={() =>
+                                void handleToggleStatus({
+                                  id: row.id,
+                                  username: row.username,
+                                  status: row.status,
+                                  depth: 0,
+                                  isDirect: true,
+                                  hasChildren: false,
+                                })
+                              }
+                              disabled={isBusy}
+                              aria-label={`${row.username} 상태 토글`}
+                            />
+                          </div>
+                        </TableCell>
+                        <TableCell className="px-3 py-3 text-center">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-9 w-9 rounded-full text-[#4e342e]/75 hover:bg-red-500/12 hover:text-red-600"
+                            onClick={() =>
+                              void handleDelete({
+                                id: row.id,
+                                username: row.username,
+                                status: row.status,
+                                depth: 0,
+                                isDirect: true,
+                                hasChildren: false,
+                              })
+                            }
+                            disabled={isBusy}
+                          >
+                            {deletingId === row.id ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
                             ) : (
-                              <ChevronRight className="h-4 w-4 shrink-0 text-[#4e342e]/70" />
-                            )
-                          ) : (
-                            <span className="w-4 shrink-0" aria-hidden />
-                          )}
-                          {row.depth > 0 && (
-                            <span className="shrink-0 text-[#4e342e]/45">└</span>
-                          )}
-                          <span className="font-medium">{row.username}</span>
-                        </button>
-                      </TableCell>
-                      <TableCell className="px-3 py-3 text-center">
-                        <span
-                          className={cn(
-                            "inline-flex rounded-full px-2.5 py-1 text-[11px] font-semibold ring-1",
-                            getStatusClassName(row.status),
-                          )}
-                        >
-                          {getStatusLabel(row.status)}
-                        </span>
-                      </TableCell>
-                      <TableCell className="px-3 py-3 text-center">
-                        <div className="inline-flex items-center justify-center">
-                          <Switch
-                            checked={row.status === "active"}
-                            onCheckedChange={() => void handleToggleStatus(row)}
+                              <Trash2 className="h-4 w-4" />
+                            )}
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            ) : (
+              <Table className="border-collapse">
+                <TableHeader>
+                  <TableRow className="border-b border-[#4e342e]/10 bg-[#fff0c8] hover:bg-[#fff0c8]">
+                    <TableHead className="h-11 w-16 bg-[#fff0c8] px-3 py-3 text-center text-[14px] font-semibold text-[#4e342e]">
+                      #
+                    </TableHead>
+                    <TableHead className="h-11 bg-[#fff0c8] px-3 py-3 text-left text-[14px] font-semibold text-[#4e342e]">
+                      아이디
+                    </TableHead>
+                    <TableHead className="h-11 w-28 bg-[#fff0c8] px-3 py-3 text-center text-[14px] font-semibold text-[#4e342e]">
+                      상태
+                    </TableHead>
+                    <TableHead className="h-11 w-28 bg-[#fff0c8] px-3 py-3 text-center text-[14px] font-semibold text-[#4e342e]">
+                      토글
+                    </TableHead>
+                    <TableHead className="h-11 w-20 bg-[#fff0c8] px-3 py-3 text-center text-[14px] font-semibold text-[#4e342e]">
+                      삭제
+                    </TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {displayRows.map((row, index) => {
+                    const isExpanded = expandedIds.has(row.id);
+                    const isBusy = togglingId === row.id || deletingId === row.id;
+
+                    return (
+                      <TableRow
+                        key={`${row.id}-${row.depth}`}
+                        className={cn(
+                          "border-b border-[#4e342e]/8 hover:bg-[#ffa000]/8",
+                          row.depth > 0 && "bg-[#fffaf0]",
+                        )}
+                      >
+                        <TableCell className="px-3 py-3 text-center text-[14px] text-[#4e342e]/75">
+                          {index + 1}
+                        </TableCell>
+                        <TableCell className="px-3 py-3 text-[14px] text-[#4e342e]">
+                          <button
+                            type="button"
+                            className={cn(
+                              "flex items-center gap-2 text-left",
+                              row.isDirect && row.hasChildren
+                                ? "cursor-pointer"
+                                : "cursor-default",
+                            )}
+                            style={{ paddingLeft: row.depth * 18 }}
+                            onClick={() => toggleExpanded(row)}
+                            disabled={!row.isDirect || !row.hasChildren}
+                          >
+                            {row.isDirect && row.hasChildren ? (
+                              isExpanded ? (
+                                <ChevronDown className="h-4 w-4 shrink-0 text-[#4e342e]/70" />
+                              ) : (
+                                <ChevronRight className="h-4 w-4 shrink-0 text-[#4e342e]/70" />
+                              )
+                            ) : (
+                              <span className="w-4 shrink-0" aria-hidden />
+                            )}
+                            {row.depth > 0 && (
+                              <span className="shrink-0 text-[#4e342e]/45">└</span>
+                            )}
+                            <span className="font-medium">{row.username}</span>
+                          </button>
+                        </TableCell>
+                        <TableCell className="px-3 py-3 text-center">
+                          <span
+                            className={cn(
+                              "inline-flex rounded-full px-2.5 py-1 text-[11px] font-semibold ring-1",
+                              getStatusClassName(row.status),
+                            )}
+                          >
+                            {getStatusLabel(row.status)}
+                          </span>
+                        </TableCell>
+                        <TableCell className="px-3 py-3 text-center">
+                          <div className="inline-flex items-center justify-center">
+                            <Switch
+                              checked={row.status === "active"}
+                              onCheckedChange={() => void handleToggleStatus(row)}
+                              disabled={!row.isDirect || isBusy}
+                              aria-label={`${row.username} 상태 토글`}
+                            />
+                          </div>
+                        </TableCell>
+                        <TableCell className="px-3 py-3 text-center">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-9 w-9 rounded-full text-[#4e342e]/75 hover:bg-red-500/12 hover:text-red-600"
+                            onClick={() => void handleDelete(row)}
                             disabled={!row.isDirect || isBusy}
-                            aria-label={`${row.username} 상태 토글`}
-                          />
-                        </div>
-                      </TableCell>
-                      <TableCell className="px-3 py-3 text-center">
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="h-9 w-9 rounded-full text-[#4e342e]/75 hover:bg-red-500/12 hover:text-red-600"
-                          onClick={() => void handleDelete(row)}
-                          disabled={!row.isDirect || isBusy}
-                        >
-                          {deletingId === row.id ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                          ) : (
-                            <Trash2 className="h-4 w-4" />
-                          )}
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
+                          >
+                            {deletingId === row.id ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <Trash2 className="h-4 w-4" />
+                            )}
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            )}
           </div>
 
           {loading && (
@@ -742,11 +1052,12 @@ export function AccountManagementDashboard() {
             </div>
           )}
 
-          {!loading && displayRows.length === 0 && (
+          {!loading &&
+            (managerRole === "admin" ? adminUsers.length === 0 : displayRows.length === 0) && (
             <div className="rounded-[24px] border border-dashed border-[#4e342e]/15 bg-white/55 px-4 py-10 text-center text-sm text-[#4e342e]/55">
               표시할 계정이 없습니다.
             </div>
-          )}
+            )}
         </div>
       </section>
     </motion.div>

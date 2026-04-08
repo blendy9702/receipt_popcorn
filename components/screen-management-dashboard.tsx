@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CheckCheck, EyeOff, Search, Tags, X } from "lucide-react";
 import { toast } from "sonner";
 import { SplitText } from "@/components/split-text/SplitText";
@@ -42,15 +42,20 @@ function normalizeAlias(value: string | null | undefined) {
 const textareaClassName =
   "min-h-[92px] w-full rounded-[24px] border border-[#4e342e]/15 bg-white/85 px-4 py-3 text-sm text-[#4e342e] shadow-sm transition-colors placeholder:text-[#4e342e]/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#4e342e]/15 disabled:cursor-not-allowed disabled:opacity-50";
 
+const SCREEN_BATCH_SIZE = 100;
+
 export function ScreenManagementDashboard() {
   const [screenCards, setScreenCards] = useState<ScreenCard[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [bulkExclude, setBulkExclude] = useState("");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [visibleCount, setVisibleCount] = useState(SCREEN_BATCH_SIZE);
   const [savingMode, setSavingMode] = useState<"replace" | "append" | null>(
     null,
   );
+  const listContainerRef = useRef<HTMLDivElement>(null);
+  const loadMoreRef = useRef<HTMLDivElement>(null);
   const [, setStatusMessage] = useState(
     "카드를 선택한 뒤 저장 유형을 선택할 수 있습니다.",
   );
@@ -133,12 +138,47 @@ export function ScreenManagementDashboard() {
     );
   }, [search, screenCards]);
 
+  const visibleCards = useMemo(
+    () => filteredCards.slice(0, visibleCount),
+    [filteredCards, visibleCount],
+  );
+
   const selectedCards = useMemo(
     () => screenCards.filter((card) => selectedIds.includes(card.id)),
     [selectedIds, screenCards],
   );
 
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+
+  useEffect(() => {
+    setVisibleCount(SCREEN_BATCH_SIZE);
+  }, [screenCards.length, search]);
+
+  useEffect(() => {
+    const root = listContainerRef.current;
+    const target = loadMoreRef.current;
+    if (!root || !target || loading || visibleCount >= filteredCards.length) {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const entry = entries[0];
+        if (!entry?.isIntersecting) return;
+        setVisibleCount((current) =>
+          Math.min(current + SCREEN_BATCH_SIZE, filteredCards.length),
+        );
+      },
+      {
+        root,
+        rootMargin: "0px 0px 120px 0px",
+        threshold: 0.1,
+      },
+    );
+
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [filteredCards.length, loading, visibleCount]);
 
   const toggleCard = (id: string) => {
     setSelectedIds((current) =>
@@ -254,9 +294,9 @@ export function ScreenManagementDashboard() {
         </motion.div>
       </section>
 
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)]">
-        <section className="rounded-[28px] bg-[#fcf8e9]/94 p-6 shadow-[0_18px_55px_rgba(78,52,46,0.08)] ring-1 ring-white/70 backdrop-blur-xl">
-          <div className="space-y-6">
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)] xl:items-stretch">
+        <section className="rounded-[28px] bg-[#fcf8e9]/94 p-6 shadow-[0_18px_55px_rgba(78,52,46,0.08)] ring-1 ring-white/70 backdrop-blur-xl xl:flex xl:min-h-[78vh] xl:flex-col">
+          <div className="space-y-6 xl:flex xl:h-full xl:flex-col">
             <div className="flex items-center justify-between">
               <div>
                 <h2 className="text-xl font-semibold text-[#4e342e]">
@@ -331,8 +371,8 @@ export function ScreenManagementDashboard() {
           </div>
         </section>
 
-        <section className="rounded-[28px] bg-[#fcf8e9]/94 p-6 shadow-[0_18px_55px_rgba(78,52,46,0.08)] ring-1 ring-white/70 backdrop-blur-xl">
-          <div className="flex flex-col gap-4">
+        <section className="rounded-[28px] bg-[#fcf8e9]/94 p-6 shadow-[0_18px_55px_rgba(78,52,46,0.08)] ring-1 ring-white/70 backdrop-blur-xl xl:flex xl:min-h-[78vh] xl:flex-col">
+          <div className="flex flex-col gap-4 xl:h-full xl:min-h-0">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <h2 className="text-xl font-semibold text-[#4e342e]">
@@ -364,13 +404,16 @@ export function ScreenManagementDashboard() {
               </div>
             </div>
 
-            <div className="grid max-h-[360px] grid-cols-2 gap-3 overflow-y-auto overscroll-y-contain px-1 py-1 sm:grid-cols-3 xl:grid-cols-3">
+            <div
+              ref={listContainerRef}
+              className="grid max-h-[360px] grid-cols-2 gap-3 overflow-y-auto overscroll-y-contain px-1 py-1 sm:grid-cols-3 xl:max-h-[64vh] xl:min-h-0 xl:flex-1 xl:auto-rows-min xl:grid-cols-3"
+            >
               {loading ? (
                 <div className="col-span-full rounded-2xl border border-dashed border-[#4e342e]/15 bg-white/60 px-4 py-10 text-center text-sm text-[#4e342e]/55">
                   화면 목록을 불러오는 중입니다.
                 </div>
               ) : (
-                filteredCards.map((card) => {
+                visibleCards.map((card) => {
                   const isSelected = selectedSet.has(card.id);
 
                   return (
@@ -412,11 +455,27 @@ export function ScreenManagementDashboard() {
                   );
                 })
               )}
+              {!loading && visibleCards.length < filteredCards.length && (
+                <div
+                  ref={loadMoreRef}
+                  className="col-span-full rounded-2xl border border-dashed border-[#4e342e]/10 bg-white/50 px-4 py-4 text-center text-sm text-[#4e342e]/55"
+                >
+                  스크롤하면 화면을 더 불러옵니다.
+                </div>
+              )}
             </div>
 
             {!loading && filteredCards.length === 0 && (
               <div className="rounded-2xl border border-dashed border-[#4e342e]/15 bg-white/60 px-4 py-10 text-center text-sm text-[#4e342e]/55">
                 검색 결과가 없습니다.
+              </div>
+            )}
+            {!loading && filteredCards.length > 0 && (
+              <div className="text-sm text-[#4e342e]/55">
+                {Math.min(visibleCards.length, filteredCards.length).toLocaleString(
+                  "ko-KR",
+                )}
+                /{filteredCards.length.toLocaleString("ko-KR")}개 표시 중
               </div>
             )}
           </div>

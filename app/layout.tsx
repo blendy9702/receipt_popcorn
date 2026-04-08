@@ -5,8 +5,8 @@ import { GradientBackground } from "@/components/gradient-background";
 import { Toaster } from "sonner";
 
 export const metadata: Metadata = {
-  title: "Popcorn Review",
-  description: "Popcorn Review",
+  title: "Popcorn 영수증",
+  description: "Popcorn 영수증",
 };
 
 export const viewport: Viewport = {
