@@ -2,6 +2,7 @@
 
 import Image from "next/image";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { motion, useMotionValue, useSpring } from "framer-motion";
 import {
   ChevronLeft,
@@ -142,6 +143,35 @@ const HOME_TABLE_PAGE_SIZE_KEY = "home-dashboard:page-size";
 
 const cardClassName =
   "rounded-[30px] border border-white/70 bg-[#fcf8e9]/94 shadow-[0_22px_60px_rgba(78,52,46,0.12)] backdrop-blur-xl";
+
+const ACTION_MENU_WIDTH = 220;
+const REVIEW_MENU_WIDTH = 180;
+
+type ActionMenuState = {
+  placeId: number;
+  rect: {
+    top: number;
+    left: number;
+    right: number;
+    bottom: number;
+    width: number;
+    height: number;
+  };
+  direction: "up" | "down";
+};
+
+type ReviewListMenuState = {
+  rowIndex: number;
+  rect: {
+    top: number;
+    left: number;
+    right: number;
+    bottom: number;
+    width: number;
+    height: number;
+  };
+  direction: "up" | "down";
+};
 
 function NumberCounter({
   value,
@@ -429,10 +459,7 @@ export function HomeDashboard({ username }: { username?: string }) {
   const [settingsHydrated, setSettingsHydrated] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [openActionMenuId, setOpenActionMenuId] = useState<number | null>(null);
-  const [openActionMenuDirection, setOpenActionMenuDirection] = useState<
-    "up" | "down"
-  >("down");
+  const [actionMenu, setActionMenu] = useState<ActionMenuState | null>(null);
   const [selectedPlaceForReviews, setSelectedPlaceForReviews] =
     useState<PlaceItem | null>(null);
   const [reviewsModalOpen, setReviewsModalOpen] = useState(false);
@@ -501,7 +528,9 @@ export function HomeDashboard({ username }: { username?: string }) {
   const manualUploadPhotosZipFileInputRef = useRef<HTMLInputElement>(null);
   const manualUploadTxtFileInputRef = useRef<HTMLInputElement>(null);
   const placesLoadMoreRef = useRef<HTMLDivElement>(null);
-  const [reviewMenuOpenId, setReviewMenuOpenId] = useState<number | null>(null);
+  const [reviewListMenu, setReviewListMenu] = useState<ReviewListMenuState | null>(
+    null,
+  );
   const [reviewEditConfirmOpen, setReviewEditConfirmOpen] = useState(false);
   const [reviewEditConfirmItem, setReviewEditConfirmItem] =
     useState<ReviewItem | null>(null);
@@ -778,17 +807,41 @@ export function HomeDashboard({ username }: { username?: string }) {
     const handlePointerDown = (event: MouseEvent) => {
       const target = event.target;
       if (!(target instanceof Element)) return;
-      if (!target.closest("[data-action-menu-root='true']")) {
-        setOpenActionMenuId(null);
+      if (
+        !target.closest("[data-action-menu-root='true']") &&
+        !target.closest("[data-action-menu-portal='true']")
+      ) {
+        setActionMenu(null);
       }
-      if (!target.closest("[data-review-menu-root='true']")) {
-        setReviewMenuOpenId(null);
+      if (
+        !target.closest("[data-review-menu-root='true']") &&
+        !target.closest("[data-review-menu-portal='true']")
+      ) {
+        setReviewListMenu(null);
       }
     };
 
     document.addEventListener("mousedown", handlePointerDown);
     return () => document.removeEventListener("mousedown", handlePointerDown);
   }, []);
+
+  useEffect(() => {
+    if (!actionMenu && !reviewListMenu) return;
+    const close = () => {
+      setActionMenu(null);
+      setReviewListMenu(null);
+    };
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    return () => {
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+    };
+  }, [actionMenu, reviewListMenu]);
+
+  useEffect(() => {
+    if (!reviewsModalOpen) setReviewListMenu(null);
+  }, [reviewsModalOpen]);
 
   const isAllPageSize = pageSize === "all";
   const effectivePageSize = isAllPageSize ? Math.max(places.length, 1) : Number(pageSize || 10);
@@ -853,7 +906,7 @@ export function HomeDashboard({ username }: { username?: string }) {
   };
 
   const openScriptsModal = async (place: PlaceItem) => {
-    setOpenActionMenuId(null);
+    setActionMenu(null);
     setSelectedPlaceForScripts(place);
     setScriptsModalOpen(true);
     setScriptsLoading(true);
@@ -987,7 +1040,7 @@ export function HomeDashboard({ username }: { username?: string }) {
   };
 
   const openGoodthingModal = async (place: PlaceItem) => {
-    setOpenActionMenuId(null);
+    setActionMenu(null);
     setSelectedPlaceForGoodthing(place);
     setGoodthingModalOpen(true);
     setGoodthingLoading(true);
@@ -1121,7 +1174,7 @@ export function HomeDashboard({ username }: { username?: string }) {
   };
 
   const openScriptReplaceModal = async (place: PlaceItem) => {
-    setOpenActionMenuId(null);
+    setActionMenu(null);
     setSelectedPlaceForScriptReplace(place);
     setScriptReplaceModalOpen(true);
     setScriptReplaceLoading(true);
@@ -1224,7 +1277,7 @@ export function HomeDashboard({ username }: { username?: string }) {
     const currentStatus = getPlaceIssueStatus(place);
     const nextStatus = currentStatus === 1 ? 0 : 1;
 
-    setOpenActionMenuId(null);
+    setActionMenu(null);
     setSelectedPlaceForIssueStatus(place);
     setPendingIssueStatus(nextStatus);
     setIssueStatusDialogOpen(true);
@@ -1292,7 +1345,7 @@ export function HomeDashboard({ username }: { username?: string }) {
   };
 
   const openHidePlaceDialog = (place: PlaceItem) => {
-    setOpenActionMenuId(null);
+    setActionMenu(null);
     setSelectedPlaceForHide(place);
     setHidePlaceDialogOpen(true);
   };
@@ -1352,7 +1405,7 @@ export function HomeDashboard({ username }: { username?: string }) {
   };
 
   const openPurgeReceiptsDialog = (place: PlaceItem) => {
-    setOpenActionMenuId(null);
+    setActionMenu(null);
     setSelectedPlaceForPurgeReceipts(place);
     setPurgeReceiptsDialogOpen(true);
   };
@@ -1472,25 +1525,25 @@ export function HomeDashboard({ username }: { username?: string }) {
   };
 
   const handleReviewDelete = async (review: ReviewItem) => {
-    setReviewMenuOpenId(null);
+    setReviewListMenu(null);
     const ok = await callUpdateReviewStatus(review, 8);
     if (ok) toast.success("삭제 요청이 완료되었습니다.");
   };
 
   const handleReviewCancel = async (review: ReviewItem) => {
-    setReviewMenuOpenId(null);
+    setReviewListMenu(null);
     const ok = await callUpdateReviewStatus(review, 99);
     if (ok) toast.success("요청 취소가 완료되었습니다.");
   };
 
   const handleReviewRegisterEdit = async (review: ReviewItem) => {
-    setReviewMenuOpenId(null);
+    setReviewListMenu(null);
     const ok = await callUpdateReviewStatus(review, 6);
     if (ok) toast.success("수정 등록이 완료되었습니다.");
   };
 
   const handleReviewRegisterDelete = async (review: ReviewItem) => {
-    setReviewMenuOpenId(null);
+    setReviewListMenu(null);
     const ok = await callUpdateReviewStatus(review, 5);
     if (ok) toast.success("삭제 등록이 완료되었습니다.");
   };
@@ -1596,7 +1649,7 @@ export function HomeDashboard({ username }: { username?: string }) {
       return;
     }
 
-    setReviewMenuOpenId(null);
+    setReviewListMenu(null);
     setReviewEditManageItem(review);
     setReviewEditManageTab("script");
     setReviewEditManageOpen(true);
@@ -1743,7 +1796,7 @@ export function HomeDashboard({ username }: { username?: string }) {
   };
 
   const openReviewEditConfirm = (review: ReviewItem) => {
-    setReviewMenuOpenId(null);
+    setReviewListMenu(null);
     setReviewEditConfirmItem(review);
     setReviewEditConfirmOpen(true);
   };
@@ -1781,7 +1834,7 @@ export function HomeDashboard({ username }: { username?: string }) {
   };
 
   const openManualUploadModal = (place: PlaceItem) => {
-    setOpenActionMenuId(null);
+    setActionMenu(null);
     setSelectedPlaceForManualUpload(place);
     setManualUploadZipFile(null);
     setManualUploadPhotosZipFile(null);
@@ -1846,7 +1899,7 @@ export function HomeDashboard({ username }: { username?: string }) {
   };
 
   const handleDownloadPlaceJobs = (place: PlaceItem) => {
-    setOpenActionMenuId(null);
+    setActionMenu(null);
 
     const params = new URLSearchParams({
       place_name: place.name ?? "",
@@ -1866,16 +1919,62 @@ export function HomeDashboard({ username }: { username?: string }) {
     placeId: number,
     event: React.MouseEvent<HTMLButtonElement>,
   ) => {
-    const rect = event.currentTarget.getBoundingClientRect();
+    setReviewListMenu(null);
+    const r = event.currentTarget.getBoundingClientRect();
+    const rect = {
+      top: r.top,
+      left: r.left,
+      right: r.right,
+      bottom: r.bottom,
+      width: r.width,
+      height: r.height,
+    };
     const estimatedMenuHeight = 312;
     const spaceBelow = window.innerHeight - rect.bottom;
     const nextDirection = spaceBelow < estimatedMenuHeight ? "up" : "down";
 
-    setOpenActionMenuDirection(nextDirection);
-    setOpenActionMenuId((current) => (current === placeId ? null : placeId));
+    setActionMenu((current) => {
+      if (current?.placeId === placeId) return null;
+      return { placeId, rect, direction: nextDirection };
+    });
   };
 
+  const toggleReviewListMenu = (
+    rowIndex: number,
+    event: React.MouseEvent<HTMLButtonElement>,
+  ) => {
+    setActionMenu(null);
+    const r = event.currentTarget.getBoundingClientRect();
+    const rect = {
+      top: r.top,
+      left: r.left,
+      right: r.right,
+      bottom: r.bottom,
+      width: r.width,
+      height: r.height,
+    };
+    const estimatedMenuHeight = 300;
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const nextDirection = spaceBelow < estimatedMenuHeight ? "up" : "down";
+
+    setReviewListMenu((current) => {
+      if (current?.rowIndex === rowIndex) return null;
+      return { rowIndex, rect, direction: nextDirection };
+    });
+  };
+
+  const actionMenuPlace =
+    actionMenu == null
+      ? null
+      : (places.find((p) => p.pid === actionMenu.placeId) ?? null);
+
+  const reviewForListMenu =
+    reviewListMenu == null
+      ? null
+      : (reviews[reviewListMenu.rowIndex] ?? null);
+
   return (
+    <>
     <motion.div
       className="popcorn-container space-y-6 md:space-y-8"
       initial={{ opacity: 0 }}
@@ -2261,12 +2360,6 @@ export function HomeDashboard({ username }: { username?: string }) {
                         ),
                       )
                     : paginatedPlaces.map((item, index) => {
-                    const issueStatus = getPlaceIssueStatus(item);
-                    const isIssuePaused = issueStatus === 0;
-                    const issueActionLabel = isIssuePaused
-                      ? "발행 시작"
-                      : "발행 중지";
-                    const IssueActionIcon = isIssuePaused ? Play : Pause;
                     const placeRowClassName = getPlaceRowClassName(item);
                     const placeMenuButtonClassName =
                       getPlaceMenuButtonClassName();
@@ -2350,96 +2443,6 @@ export function HomeDashboard({ username }: { username?: string }) {
                             >
                               <Menu className="h-4 w-4" />
                             </button>
-
-                            {openActionMenuId === item.pid && (
-                              <motion.div
-                                className={cn(
-                                  "absolute right-0 z-20 w-[220px] overflow-hidden rounded-[22px] border border-[#4e342e]/12 bg-[#fcf8e9] p-2 text-left shadow-[0_18px_40px_rgba(78,52,46,0.12)]",
-                                  openActionMenuDirection === "up"
-                                    ? "bottom-[calc(100%+8px)]"
-                                    : "top-[calc(100%+8px)]",
-                                )}
-                                initial={{
-                                  opacity: 0,
-                                  y: openActionMenuDirection === "up" ? -8 : 8,
-                                }}
-                                animate={{ opacity: 1, y: 0 }}
-                                transition={{ duration: 0.18 }}
-                                onMouseDown={(event) => event.stopPropagation()}
-                              >
-                                {[
-                                  {
-                                    label: issueActionLabel,
-                                    icon: IssueActionIcon,
-                                  },
-                                  { label: "플레이스 숨기기", icon: EyeOff },
-                                  { label: "원고 수정", icon: Pencil },
-                                  { label: "좋았던점 수정", icon: FilePenLine },
-                                  { label: "원고 교체", icon: RefreshCw },
-                                  { label: "수동 영수증추가", icon: Plus },
-                                  { label: "영수증 전체 삭제", icon: Trash2 },
-                                  { label: "다운로드", icon: Download },
-                                ].map((menuItem) => {
-                                  const MenuIcon = menuItem.icon;
-                                  return (
-                                    <button
-                                      key={menuItem.label}
-                                      type="button"
-                                      className="flex w-full items-center gap-3 rounded-[16px] px-3 py-2.5 text-sm font-medium text-[#4e342e] transition hover:bg-[#ffa000]/40 hover:shadow-sm"
-                                      onClick={() => {
-                                        if (
-                                          menuItem.label === "발행 시작" ||
-                                          menuItem.label === "발행 중지"
-                                        ) {
-                                          openIssueStatusDialog(item);
-                                          return;
-                                        }
-                                        if (
-                                          menuItem.label === "플레이스 숨기기"
-                                        ) {
-                                          openHidePlaceDialog(item);
-                                          return;
-                                        }
-                                        if (
-                                          menuItem.label === "영수증 전체 삭제"
-                                        ) {
-                                          openPurgeReceiptsDialog(item);
-                                          return;
-                                        }
-                                        if (menuItem.label === "다운로드") {
-                                          handleDownloadPlaceJobs(item);
-                                          return;
-                                        }
-                                        if (menuItem.label === "원고 수정") {
-                                          void openScriptsModal(item);
-                                          return;
-                                        }
-                                        if (menuItem.label === "원고 교체") {
-                                          void openScriptReplaceModal(item);
-                                          return;
-                                        }
-                                        if (
-                                          menuItem.label === "수동 영수증추가"
-                                        ) {
-                                          openManualUploadModal(item);
-                                          return;
-                                        }
-                                        if (
-                                          menuItem.label === "좋았던점 수정"
-                                        ) {
-                                          void openGoodthingModal(item);
-                                          return;
-                                        }
-                                        setOpenActionMenuId(null);
-                                      }}
-                                    >
-                                      <MenuIcon className="h-4 w-4 shrink-0 text-[#4e342e]/75" />
-                                      <span>{menuItem.label}</span>
-                                    </button>
-                                  );
-                                })}
-                              </motion.div>
-                            )}
                           </div>
                         </TableCell>
                       </TableRow>
@@ -2678,17 +2681,7 @@ export function HomeDashboard({ username }: { username?: string }) {
                         ? `${NAVER_REVIEW_BASE_URL}/${encodeURIComponent(review.user_code)}/reviewfeed?reviewId=${encodeURIComponent(review.review_id)}`
                         : "-";
 
-                    const st = review.status;
-                    const reviewMenuTone = getReviewMenuTone(st);
-                    const canEdit = st !== 7;
-                    const canDelete = st !== 8;
-                    const canCancel =
-                      st === 5 || st === 6 || st === 7 || st === 8;
-                    const showEditManage = st === 7;
-                    const showRegisterEdit =
-                      managerRole === "admin" && st === 7;
-                    const showRegisterDelete =
-                      managerRole === "admin" && st === 8;
+                    const reviewMenuTone = getReviewMenuTone(review.status);
                     const isSubmitting =
                       reviewActionSubmittingId === review.job_id;
 
@@ -2740,9 +2733,9 @@ export function HomeDashboard({ username }: { username?: string }) {
                             {getReviewStatusLabel(review.status)}
                           </span>
                         </TableCell>
-                        <TableCell className="relative px-3 py-2 text-center">
+                        <TableCell className="px-3 py-2 text-center">
                           <div
-                            className="relative inline-block"
+                            className="inline-block"
                             data-review-menu-root="true"
                           >
                             <button
@@ -2754,122 +2747,10 @@ export function HomeDashboard({ username }: { username?: string }) {
                               )}
                               aria-label="리뷰 메뉴"
                               disabled={isSubmitting}
-                              onClick={() =>
-                                setReviewMenuOpenId((prev) =>
-                                  prev === review.job_id
-                                    ? null
-                                    : (review.job_id ?? null),
-                                )
-                              }
+                              onClick={(e) => toggleReviewListMenu(index, e)}
                             >
                               <Ellipsis className="h-4 w-4" />
                             </button>
-
-                            {reviewMenuOpenId === review.job_id && (
-                              <motion.div
-                                className={cn(
-                                  "absolute right-0 z-30 w-[180px] overflow-hidden rounded-[20px] border p-1.5 text-left shadow-[0_16px_36px_rgba(78,52,46,0.14)]",
-                                  reviewMenuTone.panel,
-                                )}
-                                style={{ top: "calc(100% + 6px)" }}
-                                initial={{ opacity: 0, y: -6 }}
-                                animate={{ opacity: 1, y: 0 }}
-                                transition={{ duration: 0.15 }}
-                                onMouseDown={(e) => e.stopPropagation()}
-                              >
-                                <button
-                                  type="button"
-                                  disabled={!canEdit}
-                                  className={cn(
-                                    "flex w-full items-center gap-2.5 rounded-[14px] px-3 py-2 text-sm font-medium transition",
-                                    canEdit
-                                      ? reviewMenuTone.primaryItem
-                                      : "cursor-not-allowed text-[#4e342e]/35",
-                                  )}
-                                  onClick={() => openReviewEditConfirm(review)}
-                                >
-                                  수정요청
-                                </button>
-                                {showEditManage && (
-                                  <button
-                                    type="button"
-                                    className={cn(
-                                      "flex w-full items-center gap-2.5 rounded-[14px] px-3 py-2 text-sm font-medium transition",
-                                      reviewMenuTone.primaryItem,
-                                    )}
-                                    onClick={() =>
-                                      void openReviewEditManage(review)
-                                    }
-                                  >
-                                    원고수정
-                                  </button>
-                                )}
-                                {showRegisterEdit && (
-                                  <button
-                                    type="button"
-                                    className={cn(
-                                      "flex w-full items-center gap-2.5 rounded-[14px] px-3 py-2 text-sm font-medium transition",
-                                      reviewMenuTone.primaryItem,
-                                    )}
-                                    onClick={() =>
-                                      void handleReviewRegisterEdit(review)
-                                    }
-                                  >
-                                    수정등록
-                                  </button>
-                                )}
-                                <button
-                                  type="button"
-                                  disabled={!canDelete}
-                                  className={cn(
-                                    "flex w-full items-center gap-2.5 rounded-[14px] px-3 py-2 text-sm font-medium transition",
-                                    canDelete
-                                      ? reviewMenuTone.dangerItem
-                                      : "cursor-not-allowed text-rose-300",
-                                  )}
-                                  onClick={() =>
-                                    void handleReviewDelete(review)
-                                  }
-                                >
-                                  삭제요청
-                                </button>
-                                {showRegisterDelete && (
-                                  <button
-                                    type="button"
-                                    className={cn(
-                                      "flex w-full items-center gap-2.5 rounded-[14px] px-3 py-2 text-sm font-medium transition",
-                                      reviewMenuTone.dangerItem,
-                                    )}
-                                    onClick={() =>
-                                      void handleReviewRegisterDelete(review)
-                                    }
-                                  >
-                                    삭제등록
-                                  </button>
-                                )}
-                                <div
-                                  className={cn(
-                                    "my-1 h-px",
-                                    reviewMenuTone.divider,
-                                  )}
-                                />
-                                <button
-                                  type="button"
-                                  disabled={!canCancel}
-                                  className={cn(
-                                    "flex w-full items-center gap-2.5 rounded-[14px] px-3 py-2 text-sm font-medium transition",
-                                    canCancel
-                                      ? reviewMenuTone.neutralItem
-                                      : "cursor-not-allowed text-[#4e342e]/28",
-                                  )}
-                                  onClick={() =>
-                                    void handleReviewCancel(review)
-                                  }
-                                >
-                                  요청취소
-                                </button>
-                              </motion.div>
-                            )}
                           </div>
                         </TableCell>
                       </TableRow>
@@ -4062,5 +3943,240 @@ export function HomeDashboard({ username }: { username?: string }) {
         </motion.div>
       )}
     </motion.div>
+    {actionMenu &&
+      actionMenuPlace &&
+      typeof document !== "undefined" &&
+      createPortal(
+        (() => {
+          const item = actionMenuPlace;
+          const issueStatus = getPlaceIssueStatus(item);
+          const isIssuePaused = issueStatus === 0;
+          const issueActionLabel = isIssuePaused ? "발행 시작" : "발행 중지";
+          const IssueActionIcon = isIssuePaused ? Play : Pause;
+          const maxLeft =
+            typeof window !== "undefined"
+              ? window.innerWidth - ACTION_MENU_WIDTH - 8
+              : 8;
+          const left = Math.min(
+            Math.max(actionMenu.rect.right - ACTION_MENU_WIDTH, 8),
+            maxLeft,
+          );
+          return (
+            <motion.div
+              data-action-menu-portal="true"
+              role="menu"
+              className={cn(
+                "fixed z-[120] w-[220px] overflow-hidden rounded-[22px] border border-[#4e342e]/12 bg-[#fcf8e9] p-2 text-left shadow-[0_18px_40px_rgba(78,52,46,0.12)]",
+                actionMenu.direction === "up" && "-translate-y-full",
+              )}
+              style={{
+                left,
+                top:
+                  actionMenu.direction === "down"
+                    ? actionMenu.rect.bottom + 8
+                    : actionMenu.rect.top - 8,
+              }}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: 0.18 }}
+              onMouseDown={(event) => event.stopPropagation()}
+            >
+              {[
+                {
+                  label: issueActionLabel,
+                  icon: IssueActionIcon,
+                },
+                { label: "플레이스 숨기기", icon: EyeOff },
+                { label: "원고 수정", icon: Pencil },
+                { label: "좋았던점 수정", icon: FilePenLine },
+                { label: "원고 교체", icon: RefreshCw },
+                { label: "수동 영수증추가", icon: Plus },
+                { label: "영수증 전체 삭제", icon: Trash2 },
+                { label: "다운로드", icon: Download },
+              ].map((menuItem) => {
+                const MenuIcon = menuItem.icon;
+                return (
+                  <button
+                    key={menuItem.label}
+                    type="button"
+                    className="flex w-full items-center gap-3 rounded-[16px] px-3 py-2.5 text-sm font-medium text-[#4e342e] transition hover:bg-[#ffa000]/40 hover:shadow-sm"
+                    onClick={() => {
+                      if (
+                        menuItem.label === "발행 시작" ||
+                        menuItem.label === "발행 중지"
+                      ) {
+                        openIssueStatusDialog(item);
+                        return;
+                      }
+                      if (menuItem.label === "플레이스 숨기기") {
+                        openHidePlaceDialog(item);
+                        return;
+                      }
+                      if (menuItem.label === "영수증 전체 삭제") {
+                        openPurgeReceiptsDialog(item);
+                        return;
+                      }
+                      if (menuItem.label === "다운로드") {
+                        handleDownloadPlaceJobs(item);
+                        return;
+                      }
+                      if (menuItem.label === "원고 수정") {
+                        void openScriptsModal(item);
+                        return;
+                      }
+                      if (menuItem.label === "원고 교체") {
+                        void openScriptReplaceModal(item);
+                        return;
+                      }
+                      if (menuItem.label === "수동 영수증추가") {
+                        openManualUploadModal(item);
+                        return;
+                      }
+                      if (menuItem.label === "좋았던점 수정") {
+                        void openGoodthingModal(item);
+                        return;
+                      }
+                      setActionMenu(null);
+                    }}
+                  >
+                    <MenuIcon className="h-4 w-4 shrink-0 text-[#4e342e]/75" />
+                    <span>{menuItem.label}</span>
+                  </button>
+                );
+              })}
+            </motion.div>
+          );
+        })(),
+        document.body,
+      )}
+      {reviewListMenu &&
+        reviewForListMenu &&
+        typeof document !== "undefined" &&
+        createPortal(
+          (() => {
+            const review = reviewForListMenu;
+            const menu = reviewListMenu;
+            const st = review.status;
+            const reviewMenuTone = getReviewMenuTone(st);
+            const canEdit = st !== 7;
+            const canDelete = st !== 8;
+            const canCancel = st === 5 || st === 6 || st === 7 || st === 8;
+            const showEditManage = st === 7;
+            const showRegisterEdit = managerRole === "admin" && st === 7;
+            const showRegisterDelete = managerRole === "admin" && st === 8;
+            const maxLeft =
+              typeof window !== "undefined"
+                ? window.innerWidth - REVIEW_MENU_WIDTH - 8
+                : 8;
+            const left = Math.min(
+              Math.max(menu.rect.right - REVIEW_MENU_WIDTH, 8),
+              maxLeft,
+            );
+
+            return (
+              <motion.div
+                data-review-menu-portal="true"
+                role="menu"
+                className={cn(
+                  "fixed z-[130] w-[180px] overflow-hidden rounded-[20px] border p-1.5 text-left shadow-[0_16px_36px_rgba(78,52,46,0.14)]",
+                  reviewMenuTone.panel,
+                  menu.direction === "up" && "-translate-y-full",
+                )}
+                style={{
+                  left,
+                  top:
+                    menu.direction === "down"
+                      ? menu.rect.bottom + 6
+                      : menu.rect.top - 6,
+                }}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ duration: 0.15 }}
+                onMouseDown={(e) => e.stopPropagation()}
+              >
+                <button
+                  type="button"
+                  disabled={!canEdit}
+                  className={cn(
+                    "flex w-full items-center gap-2.5 rounded-[14px] px-3 py-2 text-sm font-medium transition",
+                    canEdit
+                      ? reviewMenuTone.primaryItem
+                      : "cursor-not-allowed text-[#4e342e]/35",
+                  )}
+                  onClick={() => openReviewEditConfirm(review)}
+                >
+                  수정요청
+                </button>
+                {showEditManage && (
+                  <button
+                    type="button"
+                    className={cn(
+                      "flex w-full items-center gap-2.5 rounded-[14px] px-3 py-2 text-sm font-medium transition",
+                      reviewMenuTone.primaryItem,
+                    )}
+                    onClick={() => void openReviewEditManage(review)}
+                  >
+                    원고수정
+                  </button>
+                )}
+                {showRegisterEdit && (
+                  <button
+                    type="button"
+                    className={cn(
+                      "flex w-full items-center gap-2.5 rounded-[14px] px-3 py-2 text-sm font-medium transition",
+                      reviewMenuTone.primaryItem,
+                    )}
+                    onClick={() => void handleReviewRegisterEdit(review)}
+                  >
+                    수정등록
+                  </button>
+                )}
+                <button
+                  type="button"
+                  disabled={!canDelete}
+                  className={cn(
+                    "flex w-full items-center gap-2.5 rounded-[14px] px-3 py-2 text-sm font-medium transition",
+                    canDelete
+                      ? reviewMenuTone.dangerItem
+                      : "cursor-not-allowed text-rose-300",
+                  )}
+                  onClick={() => void handleReviewDelete(review)}
+                >
+                  삭제요청
+                </button>
+                {showRegisterDelete && (
+                  <button
+                    type="button"
+                    className={cn(
+                      "flex w-full items-center gap-2.5 rounded-[14px] px-3 py-2 text-sm font-medium transition",
+                      reviewMenuTone.dangerItem,
+                    )}
+                    onClick={() => void handleReviewRegisterDelete(review)}
+                  >
+                    삭제등록
+                  </button>
+                )}
+                <div
+                  className={cn("my-1 h-px", reviewMenuTone.divider)}
+                />
+                <button
+                  type="button"
+                  disabled={!canCancel}
+                  className={cn(
+                    "flex w-full items-center gap-2.5 rounded-[14px] px-3 py-2 text-sm font-medium transition",
+                    canCancel
+                      ? reviewMenuTone.neutralItem
+                      : "cursor-not-allowed text-[#4e342e]/28",
+                  )}
+                  onClick={() => void handleReviewCancel(review)}
+                >
+                  요청취소
+                </button>
+              </motion.div>
+            );
+          })(),
+          document.body,
+        )}
+    </>
   );
 }
